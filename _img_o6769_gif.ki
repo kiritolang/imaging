@@ -1,8 +1,10 @@
-# gif.ki -- a GIF87a/89a decoder in pure Kirito (LZW + palette + animation), on the tensor backend.
+# _img_o6769_gif.ki -- GIF87a/89a decoder in pure Kirito (LZW + palette + animation), on the tensor
+# backend. INTERNAL module of the imaging package: reach it via `img_image.open(...)` / `img_video`;
+# the `_img_o6769_` prefix keeps it out of the way in the flat global module list.
 #
 # Decodes static and animated GIFs into RGB frames: variable-width LZW (LSB-first), global/local
 # colour tables, interlacing, transparency, and the four disposal methods (so a multi-frame GIF
-# composites into a sequence of full RGB frames -- the form `video.ki` consumes for animation).
+# composites into a sequence of full RGB frames -- the form `img_video` consumes for animation).
 #
 #   frames(bytes) -> [ {rgb: tensor(H,W,3), delay: ms}, ... ]     # every composited frame
 #   firstframe(bytes) -> [tensor(H,W,3), "RGB"]                   # just the first (for Image.open)

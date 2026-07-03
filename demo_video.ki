@@ -3,11 +3,11 @@
 # Reads the committed animated GIF, prints its properties, applies an imaging filter to each frame,
 # and writes a horizontal "film-strip" contact sheet (original on top, edge-detected below) as a PNG.
 
-var cv = import("video")
+var cv = import("img_video")
 var path = import("path")
-var Image = import("imaging")
-var ImageFilter = import("imagefilter")
-var ImageOps = import("imageops")
+var Image = import("img_image")
+var ImageFilter = import("img_filter")
+var ImageOps = import("img_ops")
 var io = import("io")
 var sys = import("sys")
 

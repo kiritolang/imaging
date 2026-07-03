@@ -3,11 +3,11 @@
 # Asserts against the committed testdata/ MJPEG+GIF assets and round-trips a PNG sequence and a Y4M
 # it writes itself. The committed-asset pixel values are this decoder's own deterministic output.
 
-var cv = import("video")
+var cv = import("img_video")
 var path = import("path")
-var Image = import("imaging")
-var jpeg = import("jpeg")
-var gif = import("gif")
+var Image = import("img_image")
+var jpeg = import("_img_o6769_jpeg")
+var gif = import("_img_o6769_gif")
 var io = import("io")
 var sys = import("sys")
 

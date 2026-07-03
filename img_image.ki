@@ -1,18 +1,19 @@
-# imaging.ki -- a pure-Kirito image library in the spirit of Pillow (PIL).
+# img_image.ki -- a pure-Kirito image library in the spirit of Pillow (PIL).
 #
 # Pixels live in a `tensor` of shape (height, width, channels), dtype Float, values 0..255. The
 # `tensor` standard library is the numerical backend: conversions, resizing, flips, point ops and
 # convolution filters are all expressed as vectorised tensor operations rather than per-pixel loops.
 #
 # A program uses this module exactly like Pillow's `Image`:
-#     var Image = import("imaging")
+#     var Image = import("img_image")
 #     var im = Image.open("photo.png")
 #     var small = im.resize([64, 64]).convert("L")
 #     small.save("thumb.png")
 #
-# Companion modules: `imageops` (whole-image operations), `imagefilter` (convolution kernels),
-# `imagedraw` (drawing primitives). Codecs included: PNG (zlib + per-scanline filters), PPM/PGM
-# (Netpbm), and 24-bit BMP.
+# Companion modules: `img_ops` (whole-image operations), `img_filter` (convolution kernels),
+# `img_draw` (drawing primitives), `img_video` (VideoCapture). Codecs included: PNG (zlib +
+# per-scanline filters), PPM/PGM (Netpbm), and 24-bit BMP; JPEG and GIF decoders are lazily loaded
+# from the internal `_img_o6769_jpeg` / `_img_o6769_gif` modules.
 
 var io = import("io")
 var zlib = import("zlib")
@@ -352,7 +353,7 @@ class Image:
                     c = c + 1
         return out
 
-    # Convolution filter (see `imagefilter`): `flt` exposes `apply(tensor) -> tensor`.
+    # Convolution filter (see `img_filter`): `flt` exposes `apply(tensor) -> tensor`.
     var filter = Function(self, flt):
         return Image(flt.apply(self._data), self.mode)
 
@@ -460,10 +461,10 @@ var frombytes = Function(data):
         var pair = _pnm_decode(data)
         return Image(pair[0], pair[1])
     if len(data) >= 2 and data[0] == 255 and data[1] == 216:        # JPEG SOI
-        var pair = import("jpeg").decode(data)                      # baseline JPEG, lazily loaded
+        var pair = import("_img_o6769_jpeg").decode(data)                      # baseline JPEG, lazily loaded
         return Image(pair[0], pair[1])
     if len(data) >= 6 and data[0] == 71 and data[1] == 73 and data[2] == 70:   # "GIF"
-        var pair = import("gif").firstframe(data)
+        var pair = import("_img_o6769_gif").firstframe(data)
         return Image(pair[0], pair[1])
     throw "unrecognized image format"
 

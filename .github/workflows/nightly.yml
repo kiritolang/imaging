@@ -1,0 +1,38 @@
+name: Nightly
+
+# Runs the full test suite once a day at 03:00 UTC against the CURRENT release of the ki interpreter
+# (kiritolang/kiritolang.github.io, latest release). If a new interpreter release regresses this
+# library, this workflow catches it without any change on our side.
+#
+# Also runnable on-demand via workflow_dispatch.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # 03:00 UTC daily
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: run_tests.sh against latest ki release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report the release binary in use
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/ki \
+              https://github.com/kiritolang/kiritolang.github.io/releases/latest/download/ki-linux-x64
+          chmod +x /tmp/ki
+          /tmp/ki --version
+
+      - name: Run the test suite
+        run: bash tools/scripts/run_tests.sh
