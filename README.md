@@ -163,8 +163,10 @@ operation is element assignment (`t[i, j] = v`), and that is exactly what `putpi
 | PNG | ✓ | ✓ | 8-bit, colour types 0/2/6 (L/RGB/RGBA); decodes all five scanline filters incl. Paeth; zlib via the stdlib |
 | PPM/PGM | ✓ | ✓ | binary Netpbm (P6/P5); handles `#` comments on read |
 | BMP | ✓ | ✓ | 24-bit uncompressed, bottom-up BGR |
-| JPEG | ✓ | — | baseline (sequential-DCT, Huffman); grey + YCbCr 4:4:4/4:2:2/4:2:0, restart markers (`_img_o6769_jpeg.ki`) |
+| JPEG | ✓ | ✓* | decode: baseline (sequential-DCT, Huffman); grey + YCbCr 4:4:4/4:2:2/4:2:0, restart markers (`_img_o6769_jpeg.ki`). encode: `.save("x.jpg")` / `.tobytes("jpeg")`, quality 0..100 (default 90), via ffmpeg subprocess (`_img_o6769_ffmpeg.ki`). |
 | GIF | ✓ | — | GIF87a/89a, static + animated (LZW, palette, interlace, transparency, disposal) (`_img_o6769_gif.ki`) |
+
+`✓*` = requires an `ffmpeg` binary on `PATH` at runtime (or `$IMG_FFMPEG`). Everything else is pure Kirito with no external dependency.
 
 PNG is the interesting one: encoding writes signature + IHDR + zlib-compressed filtered scanlines +
 IEND, with CRC-32 per chunk (both from the `zlib` and `hash` stdlib modules); decoding parses the
@@ -172,18 +174,35 @@ chunks, inflates the IDAT stream and reverses the per-row filters into a tensor.
 full baseline pipeline — Huffman entropy decode, dequantise, an 8×8 inverse DCT (as two `tensor`
 matmuls per block) and a vectorised YCbCr→RGB — which is what makes MJPEG video readable.
 
+**JPEG encoding is delegated to a local `ffmpeg` binary via `sys.createprocess`.** A pure-Kirito
+JPEG encoder (Huffman-table construction + baseline sequential quantisation) is heavier than the
+decoder and duplicates what every ffmpeg install already ships — and once we depend on ffmpeg for
+compressed video anyway, one dependency covers both. If ffmpeg is not on `PATH`, the JPEG save
+paths throw a clear error pointing at how to install it; the other formats keep working.
+
 ## Video — an OpenCV-style `VideoCapture`
 
-`img_video.ki` reads video as a sequence of frames, in the spirit of `cv2.VideoCapture`, for every
-source that is decodable in pure Kirito (no external codec):
+`img_video.ki` reads video as a sequence of frames, in the spirit of `cv2.VideoCapture`, from every
+source it can reach — the pure-Kirito backends (MJPEG / GIF / Y4M / image-sequence / HTTP-MJPEG)
+plus an ffmpeg-backed path for **compressed video and RTSP** (MP4 / MKV / MOV / AVI / WebM / FLV /
+TS / H.264 / HEVC / AV1 / RTSP / RTMP …):
 
 ```kirito
 var cv = import("img_video")
-var cap = cv.VideoCapture("clip.mjpeg")        # or "anim.gif", "clip.y4m", "frames/f_%04d.png",
-                                                #    or "http://camera/stream" (MJPEG over HTTP)
+
+# Pure-Kirito backends -- no external dependency.
+var cap = cv.VideoCapture("clip.mjpeg")            # or "anim.gif", "clip.y4m",
+                                                    #    "frames/f_%04d.png", or
+                                                    #    "http://camera/stream" (MJPEG-over-HTTP)
+
+# ffmpeg-backed backends -- require an `ffmpeg` binary on PATH.
+var mp4 = cv.VideoCapture("in.mp4")                #    file: transcoded to MJPEG at open()
+var rtsp = cv.VideoCapture("rtsp://cam/stream",    #    live: capped at duration seconds
+                           duration = 30)          #          (default 30 s for rtsp:// / rtmp://)
+
 io.print(cap.get(cv.CAP_PROP_FRAME_COUNT), cap.width, cap.height, cap.get(cv.CAP_PROP_FPS))
 while True:
-    var ok_frame = cap.read()                   # [ok, Image]
+    var ok_frame = cap.read()                       # [ok, Image]
     if not ok_frame[0]:
         break
     discard ok_frame[1].filter(import("img_filter").FIND_EDGES)   # frames are img_image Images
@@ -191,18 +210,19 @@ cap.release()
 # or: for frame in cap: ...
 ```
 
-Sources: **MJPEG** files (a stream of baseline JPEGs), **animated GIF**, **Y4M** (raw YUV4MPEG2 — the
-uncompressed interchange ffmpeg pipes), **image sequences** (`printf`-style `%0Nd` patterns), and
-**network MJPEG** (`multipart/x-mixed-replace` over HTTP — the common IP-camera case), read over a
-socket. The surface mirrors OpenCV: `read`/`grab`/`retrieve`, `isopened`, `get`/`set` with the
-`CAP_PROP_*` ids (random-access seek on file backends), `release`, and `for frame in cap`.
+The surface mirrors OpenCV: `read` / `grab` / `retrieve`, `isopened`, `get` / `set` with the
+`CAP_PROP_*` ids (random-access seek on file backends), `release`, and `for frame in cap`. Every
+capture also carries `.kind` (the on-disk container type) and `.backend` (`"native"` for the pure-
+Kirito paths, `"ffmpeg"` when we transcoded through `ffmpeg`) so a program can tell how a source is
+being decoded.
 
-> **What about MP4 / H.264 / RTSP?** Those are out of reach in pure Kirito: a real video codec
-> (H.264/HEVC) is far beyond a pure-Kirito script, and Kirito has no subprocess to delegate to ffmpeg
-> the way OpenCV's FFMPEG backend does. Transcode to MJPEG first and open that —
-> `ffmpeg -i in.mp4 -c:v mjpeg out.mjpeg`, or for a camera
-> `ffmpeg -rtsp_transport tcp -i rtsp://host/stream -c:v mjpeg out.mjpeg`. The MJPEG-over-HTTP backend
-> covers the large class of cameras that already expose an MJPEG endpoint, with no transcode at all.
+> **MP4 / H.264 / RTSP** are handled by transcoding the source into a temp MJPEG file at open()
+> time (via `sys.createprocess` → `ffmpeg -i <source> -c:v mjpeg …`), then reading that with the
+> native MJPEG backend. This works because `ffmpeg` is a synchronous one-shot — Kirito has no
+> async subprocess to keep an ffmpeg pipe alive across `grab()`s. For a live RTSP camera pass
+> `duration=…` to control how many seconds get captured (default 30 s). The transcoded temp file
+> is deleted in `release()`. If `ffmpeg` is not installed, the ffmpeg-backed backends throw a
+> clear error; the pure-Kirito backends keep working with zero external dependency.
 
 ## Cross-validation against Pillow
 
@@ -232,11 +252,13 @@ lists its full method surface — the same guarantees every Kirito value carries
 
 - 8-bit channels only (no 16-bit / float-HDR images); palette PNGs (colour type 3) aren't decoded.
 - `rotate` covers 90° multiples only; arbitrary-angle resampling isn't implemented.
-- JPEG is **decode-only** and **baseline-only** (progressive/arithmetic JPEGs are rejected); chroma is
-  upsampled nearest-neighbour, so subsampled JPEGs differ from libjpeg's "fancy" upsampling by a few
-  counts at colour edges. No JPEG/GIF *encoder*.
-- Video is limited to codecs decodable in pure Kirito (MJPEG/GIF/Y4M/image-sequence); compressed
-  video (H.264/HEVC, MP4/MKV, RTSP) needs an external transcode to MJPEG (see the Video section).
+- JPEG **decode** is baseline-only (progressive/arithmetic are rejected); chroma is upsampled
+  nearest-neighbour, so subsampled JPEGs differ from libjpeg's "fancy" upsampling by a few counts
+  at colour edges. JPEG **encode** and the compressed-video / RTSP backends need `ffmpeg` on `PATH`
+  at runtime (or `$IMG_FFMPEG`) — no in-process encoder.
+- No GIF *encoder*.
+- The ffmpeg-backed video path transcodes to a MJPEG temp file at `open()` and reads back through
+  the native MJPEG backend — a live RTSP stream is capped by `duration=`, defaulting to 30 s.
 - No text rendering (Pillow's `ImageFont`).
 - `GaussianBlur` is a true discrete Gaussian rather than Pillow's box-approximation, so blurred
   output is visually equivalent but not bit-identical.

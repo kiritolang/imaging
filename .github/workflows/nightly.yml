@@ -26,6 +26,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ffmpeg is an OPTIONAL dependency of the library at runtime (needed for JPEG encoding, MP4 /
+      # H.264 / RTSP video). We install it in CI so the ffmpeg-backed test file actually exercises
+      # its code paths instead of gracefully skipping.
+      - name: Install ffmpeg (optional runtime dep)
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
+
       - name: Report the release binary in use
         run: |
           set -eux

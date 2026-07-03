@@ -1,13 +1,25 @@
-# img_video.ki -- reading video as frames, in the spirit of OpenCV's cv2.VideoCapture, in pure Kirito.
+# img_video.ki -- reading video as frames, in the spirit of OpenCV's cv2.VideoCapture.
 #
-# Like OpenCV, a VideoCapture is opened on a *source* and yields frames as images. The sources that
-# are decodable in pure Kirito (no external codec/ffmpeg) are supported:
+# Like OpenCV, a VideoCapture is opened on a *source* and yields frames as images. Two tiers of
+# backend:
 #
-#   - an MJPEG file (".mjpeg"/".mjpg"): a stream of baseline JPEGs (decoded by `_img_o6769_jpeg`)
-#   - an animated GIF (".gif"): composited frames (decoded by `_img_o6769_gif`)
-#   - a raw YUV4MPEG2 file (".y4m"): the uncompressed interchange ffmpeg pipes
-#   - an image sequence ("dir/frame_%04d.png"): numbered PNG/PPM/BMP/JPEG frames
-#   - a network MJPEG stream ("http://host/path"): multipart/x-mixed-replace, read over a socket
+# Pure-Kirito (no external dependency):
+#   - MJPEG file (".mjpeg"/".mjpg"): a stream of baseline JPEGs (decoded by `_img_o6769_jpeg`)
+#   - animated GIF (".gif"): composited frames (decoded by `_img_o6769_gif`)
+#   - raw YUV4MPEG2 file (".y4m"): the uncompressed interchange ffmpeg pipes
+#   - image sequence ("dir/frame_%04d.png"): numbered PNG/PPM/BMP/JPEG frames
+#   - network MJPEG stream ("http://host/path"): multipart/x-mixed-replace, read over a socket
+#
+# ffmpeg-backed (requires an `ffmpeg` binary on PATH -- see _img_o6769_ffmpeg.ki):
+#   - compressed-video files (.mp4/.mkv/.mov/.avi/.webm/.flv/.ts/.m4v/.wmv/.mpg/.mpeg/.3gp/.vob/
+#     .ogv/.m2ts/.mts): H.264/HEVC/VP9/AV1/... whatever ffmpeg reads
+#   - RTSP live streams ("rtsp://host/path"), RTMP ("rtmp://..."), RTSPS
+#   - a compressed video served over HTTP (extension-sniffed, e.g. "https://host/x.mp4")
+#
+# The ffmpeg backend transcodes the source into a temp MJPEG file at open() time and reads that
+# with the native MJPEG backend -- a full ffmpeg pipe cannot be kept alive across grab()s because
+# sys.createprocess is synchronous. Pass `duration` (seconds) to cap how much of a live stream is
+# captured; the default for RTSP/RTMP is 30 s so a naive `VideoCapture("rtsp://...")` never wedges.
 #
 # Frames come back as `img_image` Images, so the whole img_image/img_ops/img_filter toolkit applies.
 #
@@ -19,13 +31,6 @@
 #           break
 #       discard pair[1].convert("L").save("frame.png")
 #   cap.release()
-#
-# TRUE compressed video (H.264/HEVC in MP4/MKV, and RTSP, which transports H.264 over RTP) is NOT
-# decodable here: a full video codec is far beyond a tree-walked script, and Kirito has no subprocess
-# to delegate to ffmpeg the way OpenCV's FFMPEG backend does. Transcode such input to MJPEG first
-# (`ffmpeg -i in.mp4 -c:v mjpeg out.mjpeg`, or `ffmpeg -rtsp_transport tcp -i rtsp://... out.mjpeg`)
-# and open the result here; the network MJPEG backend handles the common IP-camera MJPEG-over-HTTP case
-# directly.
 
 var Image = import("img_image")
 var path = import("path")
@@ -45,6 +50,18 @@ var CAP_PROP_FRAME_COUNT = 7
 # ---------------------------------------------------------------- helpers
 var _ends = Function(s, suf):
     return len(s) >= len(suf) and s[len(s) - len(suf):] == suf
+
+# True iff the path/URL's extension is a compressed-video format we can't decode natively --
+# ffmpeg has to transcode it to MJPEG first. Kept as a single closed list so the router in
+# _open() stays predictable (an unknown extension falls through to the MJPEG backend, matching the
+# pre-ffmpeg behaviour).
+var _COMPRESSED_EXTS = [".mp4", ".mkv", ".mov", ".avi", ".webm", ".flv", ".ts", ".m4v", ".wmv",
+                       ".mpg", ".mpeg", ".3gp", ".vob", ".ogv", ".m2ts", ".mts"]
+var _is_compressed_ext = Function(s):
+    for e in _COMPRESSED_EXTS:
+        if _ends(s, e):
+            return True
+    return False
 
 # Index of the first occurrence of sub-`needle` in `hay` (both Bytes) at or after `start`, else -1.
 var _findbytes = Function(hay, needle, start):
@@ -106,9 +123,12 @@ var _seq_path = Function(pattern, idx):
 
 # ---------------------------------------------------------------- the capture object
 class VideoCapture:
-    var _init_ = Function(self, source):
+    # `duration` (seconds) caps how much of a live source (RTSP/HTTP) or file we transcode via
+    # ffmpeg -- only meaningful for the compressed-video backends. None = no cap (a whole file).
+    var _init_ = Function(self, source, duration = None):
         self.source = source
         self.kind = ""
+        self.backend = "native"                          # "native" for pure-Kirito backends, "ffmpeg" when we transcoded
         self.pos = 0
         self.width = 0
         self.height = 0
@@ -121,6 +141,8 @@ class VideoCapture:
         self._buf = None
         self._grabbed = None
         self._opened = False
+        self._temp_transcoded = None    # set when we transcoded through ffmpeg; cleaned on release()
+        self._duration = duration
         self._open(source)
 
     var _str_ = Function(self):
@@ -128,16 +150,55 @@ class VideoCapture:
 
     var _open = Function(self, source):
         var lower = source.lower()
-        if lower.startswith("http://") or lower.startswith("https://"):
-            self._open_http(source)
+        # RTSP live streams and file-based compressed video always go through ffmpeg: we can't
+        # decode H.264/HEVC/AV1 in pure Kirito, and there is no async subprocess to keep an
+        # ffmpeg pipe alive, so we transcode into a MJPEG file first and open that.
+        if lower.startswith("rtsp://") or lower.startswith("rtsps://") or lower.startswith("rtmp://"):
+            self._open_ffmpeg(source, True)
+        elif lower.startswith("http://") or lower.startswith("https://"):
+            # An HTTP URL might be MJPEG (our native multipart/x-mixed-replace backend) or a
+            # compressed video (a .mp4 sitting on a server). We probe by extension.
+            if _is_compressed_ext(lower):
+                self._open_ffmpeg(source, False)
+            else:
+                self._open_http(source)
         elif source.find("%") >= 0:
             self._open_seq(source)
         elif _ends(lower, ".gif"):
             self._open_gif(source)
         elif _ends(lower, ".y4m"):
             self._open_y4m(source)
+        elif _is_compressed_ext(lower):
+            self._open_ffmpeg(source, False)
         else:
             self._open_mjpeg(source)
+
+    # ---- compressed video (MP4/MKV/MOV/AVI/WebM/FLV/TS + RTSP/RTMP) via ffmpeg transcode ----
+    # We stage the source as a temp MJPEG file (a stream of baseline JPEGs, which our pure-Kirito
+    # backend already reads) and then delegate to _open_mjpeg on that. The temp file lives for the
+    # lifetime of the VideoCapture and is deleted in release().
+    var _open_ffmpeg = Function(self, source, is_live):
+        var ff = import("_img_o6769_ffmpeg")
+        var tmp = ff.tempfile(".mjpeg")
+        var pre = []
+        if is_live:
+            pre.append("-rtsp_transport")
+            pre.append("tcp")
+        var post = ["-c:v", "mjpeg", "-q:v", "5", "-f", "mjpeg"]
+        if self._duration != None:
+            post.append("-t")
+            post.append(String(self._duration))
+        elif is_live:
+            # A live source with no duration cap would run forever. Default to 30 s so a naive
+            # `cv.VideoCapture("rtsp://…")` never wedges.
+            post.append("-t")
+            post.append("30")
+        discard ff.transcode_to(source, tmp, pre_args = pre, post_args = post, timeout = 600)
+        self._temp_transcoded = tmp
+        # We keep `kind == "mjpeg"` for the dispatch in _read_next (the actual bytes ARE MJPEG);
+        # `.backend` surfaces the true origin for users introspecting the capture.
+        self._open_mjpeg(tmp)
+        self.backend = "ffmpeg"
 
     # ---- MJPEG file ----
     var _open_mjpeg = Function(self, path):
@@ -416,6 +477,15 @@ class VideoCapture:
         if self._sock != None:
             self._sock.close()
             self._sock = None
+        # If we transcoded via ffmpeg into a temp file, delete it. Never throw on a missing file:
+        # the point of release() is best-effort cleanup, and this container might be running under
+        # sanitisers that clear /tmp between test cases.
+        if self._temp_transcoded != None:
+            try:
+                discard path.remove(self._temp_transcoded, missing_ok = True)
+            catch as e:
+                pass
+            self._temp_transcoded = None
         self._opened = False
         return None
 
@@ -461,6 +531,8 @@ var _upsample = Function(t, w, h):
         x = x + 1
     return t.take(iy, 0).swapaxes(0, 1).take(ix, 0).swapaxes(0, 1)
 
-# Open a capture (mirrors cv2.VideoCapture(source)).
-var open = Function(source):
-    return VideoCapture(source)
+# Open a capture (mirrors cv2.VideoCapture(source)). `duration` caps the ffmpeg transcode of a
+# live source (RTSP/RTMP) or a compressed file to that many seconds; unused for the pure-Kirito
+# MJPEG/GIF/Y4M/image-sequence backends.
+var open = Function(source, duration = None):
+    return VideoCapture(source, duration = duration)
