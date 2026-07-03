@@ -1,0 +1,319 @@
+# test_img_image_class.ki -- exhaustive tests for the Image class in img_image. Every attribute,
+# every method, on every mode, with the happy path, degenerate shapes, and adversarial input.
+
+var C = import("_common")
+var Image = import("img_image")
+var T = import("tensor")
+
+var s = C.Suite("img_image class")
+
+# ----------------------------------------------------------------- attributes after _init_
+var im = Image.new("RGB", [5, 3], [10, 20, 30])
+s.eq("attr mode",   im.mode,   "RGB")
+s.eq("attr width",  im.width,  5)
+s.eq("attr height", im.height, 3)
+s.eq("attr size",   im.size,   [5, 3])          # size is [w, h], matching Pillow
+# The public bridge to the underlying (H,W,C) tensor is .tensor(); `_data` is private.
+s.eq("tensor() shape", im.tensor().shape(), [3, 5, 3])
+
+# ----------------------------------------------------------------- _str_
+s.truthy("_str_ contains mode", String(im).find("mode=RGB") >= 0)
+s.truthy("_str_ contains size", String(im).find("5x3") >= 0)
+
+# ----------------------------------------------------------------- tensor()
+# .tensor() hands out the underlying (H,W,C) tensor -- the bridge to bulk tensor maths.
+var tref = im.tensor()
+s.eq("tensor() returns (H,W,C)", tref.shape(), [3, 5, 3])
+# tensor arithmetic is functional, so the Image is not mutated by ops on the exposed tensor.
+discard tref + 100.0
+s.eq("tensor() ops don't mutate", im.getpixel([0, 0]), [10, 20, 30])
+
+# ----------------------------------------------------------------- tolist()
+# For "L" -> [H][W] of Integers; for RGB/RGBA -> [H][W][C] of Integers.
+var lgrey = Image.new("L", [2, 3], 42).tolist()
+s.eq("tolist L shape",    len(lgrey),        3)
+s.eq("tolist L row len",  len(lgrey[0]),     2)
+s.eq("tolist L pixel",    lgrey[0][0],       42)
+var lrgb = Image.new("RGB", [2, 2], [1, 2, 3]).tolist()
+s.eq("tolist RGB pixel",  lrgb[1][0],        [1, 2, 3])
+var lrgba = Image.new("RGBA", [1, 1], [1, 2, 3, 4]).tolist()
+s.eq("tolist RGBA pixel", lrgba[0][0],       [1, 2, 3, 4])
+
+# ----------------------------------------------------------------- copy()
+var a = Image.new("RGB", [3, 3], [10, 20, 30])
+var b = a.copy()
+s.eq("copy same mode",  b.mode,  a.mode)
+s.eq("copy same size",  b.size,  a.size)
+s.eq("copy same pixel", b.getpixel([1, 1]), [10, 20, 30])
+# Independent storage: mutating the copy leaves the original alone.
+b.putpixel([0, 0], [99, 99, 99])
+s.eq("copy is deep (b changed)", b.getpixel([0, 0]), [99, 99, 99])
+s.eq("copy is deep (a intact)",  a.getpixel([0, 0]), [10, 20, 30])
+
+# ----------------------------------------------------------------- getpixel()
+var gp = Image.new("RGBA", [4, 4], [5, 6, 7, 8])
+s.eq("getpixel corner",  gp.getpixel([0, 0]), [5, 6, 7, 8])
+s.eq("getpixel far",     gp.getpixel([3, 3]), [5, 6, 7, 8])
+s.eq("getpixel L int",   Image.new("L", [2, 2], 99).getpixel([1, 1]), 99)
+# Off-canvas coordinates are rejected explicitly (they would otherwise silently wrap).
+s.throws("getpixel x<0",  Function(): return gp.getpixel([-1, 0]), "out of range")
+s.throws("getpixel y<0",  Function(): return gp.getpixel([0, -1]), "out of range")
+s.throws("getpixel x=w",  Function(): return gp.getpixel([4, 0]),  "out of range")
+s.throws("getpixel y=h",  Function(): return gp.getpixel([0, 4]),  "out of range")
+
+# ----------------------------------------------------------------- putpixel()
+var pp = Image.new("RGB", [3, 3])
+pp.putpixel([1, 1], [100, 150, 200])
+s.eq("putpixel writes center", pp.getpixel([1, 1]), [100, 150, 200])
+s.eq("putpixel leaves others", pp.getpixel([0, 0]), [0, 0, 0])
+# Overflow / underflow values are clamped to 0..255.
+pp.putpixel([2, 2], [-50, 300, 128])
+s.eq("putpixel clamps",  pp.getpixel([2, 2]), [0, 255, 128])
+# "L" mode accepts an Integer OR a [v] list (Pillow accepts both).
+var ppL = Image.new("L", [2, 2])
+ppL.putpixel([0, 0], 128)
+ppL.putpixel([1, 1], [200])
+s.eq("putpixel L int",  ppL.getpixel([0, 0]), 128)
+s.eq("putpixel L [v]",  ppL.getpixel([1, 1]), 200)
+# Off-canvas coordinates are also rejected on write.
+s.throws("putpixel x=w", Function(): return pp.putpixel([3, 0], [1, 2, 3]), "out of range")
+s.throws("putpixel y<0", Function(): return pp.putpixel([0, -1], [1, 2, 3]), "out of range")
+
+# ----------------------------------------------------------------- convert()
+# Identity: convert to the current mode returns a COPY (independent storage), never the same handle.
+var cid = Image.new("RGB", [2, 2], [10, 20, 30])
+var cid2 = cid.convert("RGB")
+cid2.putpixel([0, 0], [99, 99, 99])
+s.eq("convert self is deep copy", cid.getpixel([0, 0]), [10, 20, 30])
+# L -> RGB fans the single channel into three equal channels.
+var lr = Image.new("L", [2, 2], 100).convert("RGB")
+s.eq("L -> RGB mode",  lr.mode,  "RGB")
+s.eq("L -> RGB pixel", lr.getpixel([0, 0]), [100, 100, 100])
+# L -> RGBA sets alpha to 255.
+var lra = Image.new("L", [1, 1], 50).convert("RGBA")
+s.eq("L -> RGBA pixel", lra.getpixel([0, 0]), [50, 50, 50, 255])
+# RGB -> L uses Pillow's ITU-R 601-2 coefficients (.299/.587/.114). White stays white; black stays black.
+s.eq("RGB white -> L", Image.new("RGB", [1, 1], [255, 255, 255]).convert("L").getpixel([0, 0]), 255)
+s.eq("RGB black -> L", Image.new("RGB", [1, 1], [0, 0, 0]).convert("L").getpixel([0, 0]), 0)
+# A middle colour: 100*.299 + 150*.587 + 200*.114 = 30 + 88 + 23 = 140 (Pillow value).
+s.close("RGB mixed -> L", Float(Image.new("RGB", [1, 1], [100, 150, 200]).convert("L").getpixel([0, 0])),
+        140.7, 1.0)
+# RGB -> RGBA opens up an alpha channel (all 255).
+s.eq("RGB -> RGBA alpha",
+     Image.new("RGB", [1, 1], [10, 20, 30]).convert("RGBA").getpixel([0, 0]),
+     [10, 20, 30, 255])
+# RGBA -> RGB strips alpha.
+s.eq("RGBA -> RGB drops alpha",
+     Image.new("RGBA", [1, 1], [10, 20, 30, 128]).convert("RGB").getpixel([0, 0]),
+     [10, 20, 30])
+# RGBA -> L uses the RGB channels (alpha ignored).
+s.eq("RGBA -> L ignores alpha",
+     Image.new("RGBA", [1, 1], [255, 255, 255, 0]).convert("L").getpixel([0, 0]),
+     255)
+# Unknown target mode is rejected.
+s.throws("convert unknown mode",
+         Function(): return im.convert("CMYK"),
+         "unsupported mode")
+
+# ----------------------------------------------------------------- crop()
+var big = Image.new("RGB", [8, 6], [0, 0, 0])
+big.putpixel([3, 3], [111, 222, 33])
+big.putpixel([5, 4], [1, 2, 3])
+var sub = big.crop([2, 2, 6, 5])
+s.eq("crop width",  sub.width,  4)
+s.eq("crop height", sub.height, 3)
+s.eq("crop shifts origin", sub.getpixel([1, 1]), [111, 222, 33])
+# A full-image crop = the whole image (Pillow-compatible).
+var full = big.crop([0, 0, big.width, big.height])
+s.eq("crop full size", full.size, big.size)
+# Adversarial: empty / inverted / out-of-range boxes throw a clear diagnostic.
+s.throws("crop inverted",   Function(): return big.crop([5, 5, 2, 2]), "out of range")
+s.throws("crop off-canvas", Function(): return big.crop([0, 0, 99, 99]), "out of range")
+s.throws("crop negative",   Function(): return big.crop([-1, 0, 5, 5]), "out of range")
+s.throws("crop empty",      Function(): return big.crop([3, 3, 3, 3]), "out of range")
+
+# ----------------------------------------------------------------- resize()
+# NEAREST is the default; pixel values just gather from source coordinates.
+var solid = Image.new("RGB", [4, 4], [10, 20, 30])
+var big_solid = solid.resize([8, 6])
+s.eq("resize default size",  big_solid.size, [8, 6])
+s.eq("resize preserves solid", big_solid.getpixel([3, 3]), [10, 20, 30])
+# Explicit NEAREST vs BILINEAR give equal results on a constant image (no gradient to smooth).
+s.eq("BILINEAR on constant", solid.resize([3, 3], Image.BILINEAR).getpixel([1, 1]), [10, 20, 30])
+# Downsize is legal.
+s.eq("resize down 1x1", solid.resize([1, 1], Image.BILINEAR).size, [1, 1])
+# BILINEAR interior smoothness: build a horizontal gradient 0..255, resize to a wider grid, and
+# verify the middle sample is between the endpoints (not just picked from one).
+var grad = Image.new("L", [3, 1])
+grad.putpixel([0, 0], 0)
+grad.putpixel([1, 0], 128)
+grad.putpixel([2, 0], 255)
+var gscaled = grad.resize([9, 1], Image.BILINEAR)
+s.truthy("bilinear middle < right",
+         gscaled.getpixel([4, 0]) < gscaled.getpixel([8, 0]))
+s.truthy("bilinear middle > left",
+         gscaled.getpixel([4, 0]) > gscaled.getpixel([0, 0]))
+# Nonpositive dimensions throw, not produce empty images.
+s.throws("resize w=0",   Function(): return solid.resize([0, 4]), "must be positive")
+s.throws("resize h=0",   Function(): return solid.resize([4, 0]), "must be positive")
+s.throws("resize neg",   Function(): return solid.resize([-1, 5]), "must be positive")
+
+# ----------------------------------------------------------------- thumbnail()
+# Preserves aspect ratio and never upscales.
+var tall = Image.new("RGB", [40, 80])
+var tn = tall.thumbnail([20, 20])
+s.eq("thumbnail width",  tn.width,  10)
+s.eq("thumbnail height", tn.height, 20)
+# Larger cap than source -> the image is returned as a copy of the original.
+var small = Image.new("L", [4, 4], 33)
+var noscale = small.thumbnail([100, 100])
+s.eq("thumbnail no-upscale size",  noscale.size,  small.size)
+s.eq("thumbnail no-upscale pixel", noscale.getpixel([2, 2]), 33)
+# Copy semantics: mutating the thumbnail does not touch the original.
+noscale.putpixel([0, 0], 200)
+s.eq("thumbnail is independent", small.getpixel([0, 0]), 33)
+
+# ----------------------------------------------------------------- transpose()
+# Build a distinguishable 2x2 so every flip/rotate has a unique fingerprint.
+var q = Image.new("L", [2, 2])
+q.putpixel([0, 0], 10)                              # top-left
+q.putpixel([1, 0], 20)                              # top-right
+q.putpixel([0, 1], 30)                              # bottom-left
+q.putpixel([1, 1], 40)                              # bottom-right
+
+var flh = q.transpose(Image.FLIP_LEFT_RIGHT)
+s.eq("FLIP_LEFT_RIGHT swaps cols", [flh.getpixel([0, 0]), flh.getpixel([1, 0])], [20, 10])
+
+var flv = q.transpose(Image.FLIP_TOP_BOTTOM)
+s.eq("FLIP_TOP_BOTTOM swaps rows", [flv.getpixel([0, 0]), flv.getpixel([0, 1])], [30, 10])
+
+var r90 = q.transpose(Image.ROTATE_90)
+# ROTATE_90 (CCW) sends top-right corner -> top-left.
+s.eq("ROTATE_90 top-left", r90.getpixel([0, 0]), 20)
+s.eq("ROTATE_90 bottom-right", r90.getpixel([1, 1]), 30)
+
+var r180 = q.transpose(Image.ROTATE_180)
+s.eq("ROTATE_180 corner", r180.getpixel([0, 0]), 40)
+s.eq("ROTATE_180 corner (2)", r180.getpixel([1, 1]), 10)
+
+var r270 = q.transpose(Image.ROTATE_270)
+s.eq("ROTATE_270 top-left", r270.getpixel([0, 0]), 30)
+s.eq("ROTATE_270 bottom-right", r270.getpixel([1, 1]), 20)
+
+var tr = q.transpose(Image.TRANSPOSE)
+s.eq("TRANSPOSE swaps (0,1)-(1,0)",
+     [tr.getpixel([0, 1]), tr.getpixel([1, 0])],
+     [20, 30])
+
+var tv = q.transpose(Image.TRANSVERSE)
+s.eq("TRANSVERSE corner", tv.getpixel([0, 0]), 40)
+s.eq("TRANSVERSE opposite corner", tv.getpixel([1, 1]), 10)
+
+# Unknown method -> throw.
+s.throws("transpose unknown", Function(): return q.transpose(99), "unknown transpose")
+
+# Non-square rectangular images survive rotate 90 (dimensions swap).
+var rect = Image.new("L", [4, 2], 128)
+s.eq("rotate 90 swaps dims", rect.transpose(Image.ROTATE_90).size, [2, 4])
+
+# ----------------------------------------------------------------- rotate()
+# 0 / 90 / 180 / 270 route through transpose; multiples of 360 normalise to 0; negatives modulo work.
+s.eq("rotate 0 keeps dims",   q.rotate(0).size,   q.size)
+s.eq("rotate 90 = ROTATE_90", q.rotate(90).getpixel([0, 0]),
+                              q.transpose(Image.ROTATE_90).getpixel([0, 0]))
+s.eq("rotate 180 corner",     q.rotate(180).getpixel([0, 0]), 40)
+s.eq("rotate 270 corner",     q.rotate(270).getpixel([0, 0]), 30)
+s.eq("rotate 360 = 0",        q.rotate(360).getpixel([1, 1]), 40)
+s.eq("rotate 450 = 90",       q.rotate(450).getpixel([0, 0]),
+                              q.rotate(90).getpixel([0, 0]))
+# Arbitrary angles are not supported (documented limitation).
+s.throws("rotate 45 rejected", Function(): return q.rotate(45), "multiples of 90")
+
+# ----------------------------------------------------------------- paste()
+var canvas = Image.new("RGB", [6, 6], [0, 0, 0])
+var stamp = Image.new("RGB", [2, 2], [200, 100, 50])
+canvas.paste(stamp, [1, 1])
+s.eq("paste writes target pixel", canvas.getpixel([1, 1]), [200, 100, 50])
+s.eq("paste extent (2)",          canvas.getpixel([2, 2]), [200, 100, 50])
+s.eq("paste bg untouched",        canvas.getpixel([0, 0]), [0, 0, 0])
+# Partial clip: stamp partially outside the canvas -- must clip, not throw.
+canvas.paste(stamp, [5, 5])
+s.eq("paste clips to canvas w-1", canvas.getpixel([5, 5]), [200, 100, 50])
+# Mode conversion happens transparently.
+var canvasL = Image.new("L", [4, 4], 0)
+canvasL.paste(Image.new("RGB", [2, 2], [255, 255, 255]), [1, 1])
+# RGB (255,255,255) -> L 255 (Pillow's luma).
+s.eq("paste cross-mode L", canvasL.getpixel([1, 1]), 255)
+
+# ----------------------------------------------------------------- point()
+# `fn` is a per-channel LUT taking Integer 0..255 -> Number. Invert.
+var pt = Image.new("L", [4, 1])
+pt.putpixel([0, 0], 0)
+pt.putpixel([1, 0], 64)
+pt.putpixel([2, 0], 128)
+pt.putpixel([3, 0], 255)
+var pt_inv = pt.point(Function(v): return 255 - v)
+s.eq("point invert 0",   pt_inv.getpixel([0, 0]), 255)
+s.eq("point invert 255", pt_inv.getpixel([3, 0]), 0)
+# LUT clamps overflow/underflow.
+s.eq("point LUT clamps high", pt.point(Function(v): return v + 1000).getpixel([0, 0]), 255)
+s.eq("point LUT clamps low",  pt.point(Function(v): return v - 1000).getpixel([3, 0]), 0)
+# The transform runs per channel on RGB.
+var rgbpt = Image.new("RGB", [1, 1], [10, 20, 30]).point(Function(v): return v * 2)
+s.eq("point RGB per channel", rgbpt.getpixel([0, 0]), [20, 40, 60])
+
+# ----------------------------------------------------------------- split()
+# split() returns C single-channel "L" images.
+var bands = Image.new("RGBA", [2, 2], [10, 20, 30, 40]).split()
+s.eq("split RGBA len", len(bands), 4)
+s.eq("split R", bands[0].getpixel([0, 0]), 10)
+s.eq("split G", bands[1].getpixel([0, 0]), 20)
+s.eq("split B", bands[2].getpixel([0, 0]), 30)
+s.eq("split A", bands[3].getpixel([0, 0]), 40)
+s.eq("split mode is L", bands[0].mode, "L")
+s.eq("split L is one band", len(Image.new("L", [2, 2]).split()), 1)
+
+# ----------------------------------------------------------------- histogram()
+# For an all-white L image, 100% of pixels land in bin 255.
+var whiteL = Image.new("L", [4, 4], 255)
+var histW = whiteL.histogram()
+s.eq("hist L length",  len(histW), 256)
+s.eq("hist L bin 255", histW[255], 16)
+s.eq("hist L bin 254", histW[254], 0)
+# RGB histogram: 256*3 bins, concatenated by channel.
+var histRGB = Image.new("RGB", [2, 2], [10, 20, 30]).histogram()
+s.eq("hist RGB length", len(histRGB), 768)
+s.eq("hist RGB R bin",  histRGB[10],           4)
+s.eq("hist RGB G bin",  histRGB[256 + 20],     4)
+s.eq("hist RGB B bin",  histRGB[512 + 30],     4)
+
+# ----------------------------------------------------------------- filter()
+# filter() delegates to a filter-like object (see test_img_filter.ki). A dummy filter here that
+# doubles every value verifies only the plumbing.
+class Doubler:
+    var apply = Function(self, d):
+        return (d * 2.0).clip(0.0, 255.0).round()
+var doubled = Image.new("L", [2, 2], 50).filter(Doubler())
+s.eq("filter applies to tensor", doubled.getpixel([0, 0]), 100)
+# The filter API works on RGB, too -- and clamps in the filter's implementation.
+var doubledRGB = Image.new("RGB", [1, 1], [100, 200, 250]).filter(Doubler())
+s.eq("filter clamps in doubler", doubledRGB.getpixel([0, 0]), [200, 255, 255])
+
+# ----------------------------------------------------------------- tobytes() format sniff
+# Encoding round-trips are exercised in test_img_image_codecs.ki. Here just sanity-check the
+# dispatcher over supported formats and the rejection of unsupported ones.
+s.truthy("tobytes png",  len(Image.new("RGB", [2, 2]).tobytes("png")) > 0)
+s.truthy("tobytes ppm",  len(Image.new("RGB", [2, 2]).tobytes("ppm")) > 0)
+s.truthy("tobytes pgm",  len(Image.new("L",   [2, 2]).tobytes("pgm")) > 0)
+s.truthy("tobytes pnm",  len(Image.new("RGB", [2, 2]).tobytes("pnm")) > 0)
+s.truthy("tobytes bmp",  len(Image.new("RGB", [2, 2]).tobytes("bmp")) > 0)
+# Case-insensitive.
+s.truthy("tobytes PNG upper", len(Image.new("RGB", [1, 1]).tobytes("PNG")) > 0)
+s.throws("tobytes rejects unknown",
+         Function(): return Image.new("L", [1, 1]).tobytes("jpeg"),
+         "unsupported format")
+s.throws("tobytes rejects empty",
+         Function(): return Image.new("L", [1, 1]).tobytes(""),
+         "unsupported format")
+
+s.done()

@@ -1,0 +1,166 @@
+# test_img_draw.ki -- exhaustive tests for every public method of the Draw class in img_draw.
+
+var C = import("_common")
+var Image = import("img_image")
+var ImageDraw = import("img_draw")
+
+var s = C.Suite("img_draw")
+
+var freshRGB = Function():
+    return Image.new("RGB", [10, 10], [0, 0, 0])
+var freshL = Function():
+    return Image.new("L", [10, 10], 0)
+
+# ----------------------------------------------------------------- attributes
+var canvas = freshRGB()
+var d = ImageDraw.Draw(canvas)
+s.eq("Draw.img handle",  d.img,    canvas)
+s.eq("Draw.width",       d.width,  10)
+s.eq("Draw.height",      d.height, 10)
+s.truthy("Draw _str_ mentions img",
+         String(d).find("ImageDraw") >= 0)
+
+# ----------------------------------------------------------------- point
+# Single point [x, y] and multi-point flat form.
+d.point([3, 3], [200, 100, 50])
+s.eq("point single pixel", canvas.getpixel([3, 3]), [200, 100, 50])
+s.eq("point leaves rest untouched", canvas.getpixel([0, 0]), [0, 0, 0])
+# Flat multiple points.
+var c2 = freshRGB()
+var d2 = ImageDraw.Draw(c2)
+d2.point([1, 1, 2, 2, 3, 3], [1, 2, 3])
+s.eq("point flat multi (1)", c2.getpixel([1, 1]), [1, 2, 3])
+s.eq("point flat multi (2)", c2.getpixel([2, 2]), [1, 2, 3])
+s.eq("point flat multi (3)", c2.getpixel([3, 3]), [1, 2, 3])
+# Nested multi-point form (list of [x, y]).
+var c3 = freshRGB()
+var d3 = ImageDraw.Draw(c3)
+d3.point([[1, 1], [4, 4]], [10, 20, 30])
+s.eq("point nested (1)", c3.getpixel([1, 1]), [10, 20, 30])
+s.eq("point nested (2)", c3.getpixel([4, 4]), [10, 20, 30])
+# Off-canvas point is silently dropped (matches Pillow's clipping behaviour).
+var cOff = freshRGB()
+var dOff = ImageDraw.Draw(cOff)
+dOff.point([-1, -1, 100, 100], [255, 255, 255])
+s.eq("point off-canvas silently clipped", cOff.getpixel([0, 0]), [0, 0, 0])
+# L-mode colour normalisation: an Integer OR a [v] list.
+var cL = freshL()
+var dL = ImageDraw.Draw(cL)
+dL.point([2, 2], 100)
+dL.point([3, 3], [200])
+s.eq("point L int",  cL.getpixel([2, 2]), 100)
+s.eq("point L [v]",  cL.getpixel([3, 3]), 200)
+# RGB canvas with a scalar fill is broadcast to [v, v, v].
+var cRGB2 = freshRGB()
+ImageDraw.Draw(cRGB2).point([5, 5], 77)
+s.eq("point RGB scalar broadcast", cRGB2.getpixel([5, 5]), [77, 77, 77])
+
+# ----------------------------------------------------------------- line
+# Straight horizontal line: every intermediate pixel painted.
+var chorz = freshRGB()
+ImageDraw.Draw(chorz).line([0, 0, 5, 0], [10, 20, 30])
+var y = 0
+var horzOK = True
+var xL = 0
+while xL <= 5:
+    if chorz.getpixel([xL, 0]) != [10, 20, 30]:
+        horzOK = False
+    xL = xL + 1
+s.eq("horizontal line all painted", horzOK, True)
+# Vertical line (single call).
+var cvert = freshRGB()
+ImageDraw.Draw(cvert).line([2, 0, 2, 5], [200, 0, 0])
+var yV = 0
+var vertOK = True
+while yV <= 5:
+    if cvert.getpixel([2, yV]) != [200, 0, 0]:
+        vertOK = False
+    yV = yV + 1
+s.eq("vertical line all painted", vertOK, True)
+# Diagonal.
+var cdiag = freshRGB()
+ImageDraw.Draw(cdiag).line([0, 0, 4, 4], [1, 2, 3])
+s.eq("diag line endpoint 0", cdiag.getpixel([0, 0]), [1, 2, 3])
+s.eq("diag line endpoint 1", cdiag.getpixel([4, 4]), [1, 2, 3])
+# Multi-segment poly-line: [x0,y0, x1,y1, x2,y2] draws two connected segments.
+var cml = freshRGB()
+ImageDraw.Draw(cml).line([0, 0, 3, 0, 3, 3], [50, 60, 70])
+s.eq("polyline knee pixel", cml.getpixel([3, 0]), [50, 60, 70])
+s.eq("polyline end pixel",  cml.getpixel([3, 3]), [50, 60, 70])
+# Thick line: width=3 stamps 3x3 blocks around each pixel.
+var cw = freshRGB()
+ImageDraw.Draw(cw).line([5, 5, 5, 5], [255, 255, 255], 3)
+s.eq("thick line stamps neighbour", cw.getpixel([4, 4]), [255, 255, 255])
+s.eq("thick line stamps center",    cw.getpixel([5, 5]), [255, 255, 255])
+s.eq("thick line stamps neighbour (opposite)", cw.getpixel([6, 6]), [255, 255, 255])
+
+# ----------------------------------------------------------------- rectangle
+# Filled rectangle covers all pixels in the inclusive box; unspecified outline leaves the border
+# painted with the fill colour (all cells inside the box are the fill).
+var crect = freshRGB()
+ImageDraw.Draw(crect).rectangle([1, 1, 3, 3], [100, 100, 100])
+var totalFilled = 0
+var yr = 1
+while yr <= 3:
+    var xr = 1
+    while xr <= 3:
+        if crect.getpixel([xr, yr]) == [100, 100, 100]:
+            totalFilled = totalFilled + 1
+        xr = xr + 1
+    yr = yr + 1
+s.eq("rectangle fills 3x3 interior", totalFilled, 9)
+s.eq("rectangle leaves outside untouched", crect.getpixel([0, 0]), [0, 0, 0])
+# Outline-only rectangle: interior stays black.
+var crectOL = freshRGB()
+ImageDraw.Draw(crectOL).rectangle([1, 1, 3, 3], None, [50, 60, 70])
+s.eq("rectangle outline paints corner",  crectOL.getpixel([1, 1]), [50, 60, 70])
+s.eq("rectangle outline leaves interior", crectOL.getpixel([2, 2]), [0, 0, 0])
+# Fill + outline together: outline overwrites the border with the outline colour.
+var crectBoth = freshRGB()
+ImageDraw.Draw(crectBoth).rectangle([1, 1, 3, 3], [200, 200, 200], [10, 20, 30])
+s.eq("rect fill+outline: corner is outline", crectBoth.getpixel([1, 1]), [10, 20, 30])
+s.eq("rect fill+outline: interior is fill",  crectBoth.getpixel([2, 2]), [200, 200, 200])
+# Coords are order-independent (the impl normalises min/max).
+var cflip = freshRGB()
+ImageDraw.Draw(cflip).rectangle([3, 3, 1, 1], [5, 5, 5])
+s.eq("rect accepts flipped coords", cflip.getpixel([2, 2]), [5, 5, 5])
+
+# ----------------------------------------------------------------- ellipse
+# Filled ellipse: the centre pixel is inside.
+var cell = freshRGB()
+ImageDraw.Draw(cell).ellipse([0, 0, 6, 6], [30, 40, 50])
+s.eq("ellipse centre filled", cell.getpixel([3, 3]), [30, 40, 50])
+# Well outside the bounding box stays untouched.
+s.eq("ellipse outside bbox stays untouched", cell.getpixel([8, 8]), [0, 0, 0])
+# Outline-only ellipse: centre stays untouched.
+var cellOL = freshRGB()
+ImageDraw.Draw(cellOL).ellipse([0, 0, 6, 6], None, [100, 100, 100])
+s.eq("ellipse outline leaves interior", cellOL.getpixel([3, 3]), [0, 0, 0])
+
+# ----------------------------------------------------------------- polygon
+# Filled triangle.
+var ctri = freshRGB()
+ImageDraw.Draw(ctri).polygon([0, 0, 6, 0, 3, 6], [70, 80, 90])
+s.eq("polygon apex vertex filled", ctri.getpixel([3, 0]), [70, 80, 90])
+s.eq("polygon centroid inside", ctri.getpixel([3, 3]), [70, 80, 90])
+# Outline-only polygon.
+var ctriOL = freshRGB()
+ImageDraw.Draw(ctriOL).polygon([0, 0, 6, 0, 3, 6], None, [200, 200, 200])
+# The outline is at least on the top edge.
+s.eq("polygon outline edge pixel", ctriOL.getpixel([3, 0]), [200, 200, 200])
+# A trivially small polygon (< 2 points) is a no-op.
+var cnoop = freshRGB()
+ImageDraw.Draw(cnoop).polygon([1, 1], [255, 0, 0])
+s.eq("polygon <2 points is no-op", cnoop.getpixel([1, 1]), [0, 0, 0])
+
+# ----------------------------------------------------------------- Draw across modes
+# The Draw class works uniformly across L / RGB / RGBA canvases.
+var cL2 = freshL()
+ImageDraw.Draw(cL2).rectangle([2, 2, 4, 4], 128)
+s.eq("Draw L fill", cL2.getpixel([3, 3]), 128)
+
+var cRGBA = Image.new("RGBA", [8, 8], [0, 0, 0, 255])
+ImageDraw.Draw(cRGBA).rectangle([1, 1, 3, 3], [100, 100, 100, 128])
+s.eq("Draw RGBA fill", cRGBA.getpixel([2, 2]), [100, 100, 100, 128])
+
+s.done()

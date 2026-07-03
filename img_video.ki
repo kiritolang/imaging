@@ -1,17 +1,17 @@
-# video.ki -- reading video as frames, in the spirit of OpenCV's cv2.VideoCapture, in pure Kirito.
+# img_video.ki -- reading video as frames, in the spirit of OpenCV's cv2.VideoCapture, in pure Kirito.
 #
 # Like OpenCV, a VideoCapture is opened on a *source* and yields frames as images. The sources that
 # are decodable in pure Kirito (no external codec/ffmpeg) are supported:
 #
-#   - an MJPEG file (".mjpeg"/".mjpg"): a stream of baseline JPEGs (decoded by `jpeg.ki`)
-#   - an animated GIF (".gif"): composited frames (decoded by `gif.ki`)
+#   - an MJPEG file (".mjpeg"/".mjpg"): a stream of baseline JPEGs (decoded by `_img_o6769_jpeg`)
+#   - an animated GIF (".gif"): composited frames (decoded by `_img_o6769_gif`)
 #   - a raw YUV4MPEG2 file (".y4m"): the uncompressed interchange ffmpeg pipes
 #   - an image sequence ("dir/frame_%04d.png"): numbered PNG/PPM/BMP/JPEG frames
 #   - a network MJPEG stream ("http://host/path"): multipart/x-mixed-replace, read over a socket
 #
-# Frames come back as `imaging` Images, so the whole imaging/imageops/imagefilter toolkit applies.
+# Frames come back as `img_image` Images, so the whole img_image/img_ops/img_filter toolkit applies.
 #
-#   var cv = import("video")
+#   var cv = import("img_video")
 #   var cap = cv.VideoCapture("clip.gif")
 #   while True:
 #       var pair = cap.read()
@@ -27,10 +27,10 @@
 # and open the result here; the network MJPEG backend handles the common IP-camera MJPEG-over-HTTP case
 # directly.
 
-var Image = import("imaging")
+var Image = import("img_image")
 var path = import("path")
-var jpeg = import("jpeg")
-var gif = import("gif")
+var jpeg = import("_img_o6769_jpeg")
+var gif = import("_img_o6769_gif")
 var io = import("io")
 var T = import("tensor")
 

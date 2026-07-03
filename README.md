@@ -16,14 +16,36 @@ real interpreter bug (a GC-rooting gap in `tensor.tolist()` for Float tensors; s
 
 ## Install
 
-It's a normal Kirito package. With `kpm` (the package manager) it installs from its GitHub repo:
+It's a normal Kirito package. With `kpm` (the package manager) it installs straight from GitHub:
 
 ```
-kpm install <owner>/<repo>
+kpm install kiritolang/imaging
 ```
 
-and then `import("imaging")` works anywhere. In *this* repository you can run the modules in place,
-because a script's own directory is on the import path:
+That drops the package into `~/.kirito/packages/imaging/` and puts its modules on the import path.
+The public surface lives in the `img_` namespace (one flat list; Kirito has no nested modules):
+
+```kirito
+var Image      = import("img_image")     # the Image class + open/save/new/blend/merge
+var ImageOps   = import("img_ops")       # ImageOps: invert, grayscale, autocontrast, ...
+var ImageFilter = import("img_filter")   # convolution + rank filters
+var ImageDraw  = import("img_draw")      # drawing primitives
+var cv         = import("img_video")     # OpenCV-style VideoCapture
+```
+
+The two codec back-ends (`_img_o6769_jpeg`, `_img_o6769_gif`) are internal — reach them through
+`Image.open(...)` and the video reader. Their `_img_o6769_` prefix keeps them out of the way in
+`import` / `inspect` listings.
+
+Pin a version or track a branch by appending `@ref`:
+
+```
+kpm install kiritolang/imaging@^1.2.0    # highest 1.x
+kpm install kiritolang/imaging@main      # tip of main
+```
+
+In *this* repository you can run the scripts in place, because a script's own directory is on the
+import path:
 
 ```
 ki demo.ki          # writes a gallery of PNGs to the temp dir
@@ -33,27 +55,27 @@ ki test_imaging.ki  # the self-test (asserts; prints ALL TESTS PASSED)
 ## Layout
 
 ```
-kirito.json        the kpm manifest (name/version/modules)
-imaging.ki         the Image class + new/open/save/fromtensor/merge/blend + PNG/PPM/PGM/BMP codecs
-imageops.ki        ImageOps: invert/grayscale/mirror/flip/posterize/solarize/autocontrast/equalize/...
-imagefilter.ki     ImageFilter: convolution kernels (BLUR/SHARPEN/...) + Gaussian/Box/rank filters
-imagedraw.ki       ImageDraw: point/line/rectangle/ellipse/polygon (mutating primitives)
-jpeg.ki            baseline JPEG decoder (Huffman + tensor IDCT + YCbCr->RGB); `.jpg` via Image.open
-gif.ki             GIF87a/89a decoder (LZW + palette + animation compositing)
-video.ki           VideoCapture: MJPEG / GIF / Y4M / image-sequence / MJPEG-over-HTTP backends
+kirito.json          the kpm manifest (name/version/modules)
+img_image.ki         Image class + new/open/save/fromtensor/merge/blend + PNG/PPM/PGM/BMP codecs
+img_ops.ki           ImageOps: invert/grayscale/mirror/flip/posterize/solarize/autocontrast/equalize/...
+img_filter.ki        ImageFilter: convolution kernels (BLUR/SHARPEN/...) + Gaussian/Box/rank filters
+img_draw.ki          ImageDraw: point/line/rectangle/ellipse/polygon (mutating primitives)
+img_video.ki         VideoCapture: MJPEG / GIF / Y4M / image-sequence / MJPEG-over-HTTP backends
+_img_o6769_jpeg.ki   internal baseline JPEG decoder (Huffman + tensor IDCT + YCbCr->RGB)
+_img_o6769_gif.ki    internal GIF87a/89a decoder (LZW + palette + animation compositing)
 demo.ki / demo_video.ki   tours that produce real PNGs / extract video frames
-test_imaging.ki    93-check self-test (CTest `script_imaging`); test_video.ki (CTest `script_video`)
+test_imaging.ki / test_video.ki   the self-tests (asserts; the nightly workflow runs both)
 compare_pillow.py / compare_video_pillow.py   pixel-for-pixel cross-validation against Pillow
-testdata/          tiny committed MJPEG + GIF assets the video self-test decodes
+testdata/            tiny committed MJPEG + GIF assets the video self-test decodes
 ```
 
 ## Quick start
 
 ```kirito
 var io = import("io")
-var Image = import("imaging")
-var ImageFilter = import("imagefilter")
-var ImageOps = import("imageops")
+var Image = import("img_image")
+var ImageFilter = import("img_filter")
+var ImageOps = import("img_ops")
 
 var im = Image.open("photo.png")        # PNG / PPM / PGM / BMP, sniffed from the header
 io.print(im.mode, im.size)              # e.g. RGB [640, 480]
@@ -86,7 +108,7 @@ The module object *is* the `Image` namespace, so it reads just like `from PIL im
 | `img.point(fn)` | remap every channel value through `fn` (via a 256-entry LUT) |
 | `img.split()` / `Image.merge(mode, bands)` | separate / recombine channels |
 | `img.histogram()` | per-channel 256-bin histogram |
-| `img.filter(flt)` | apply an `imagefilter` (see below) |
+| `img.filter(flt)` | apply an `img_filter` (see below) |
 | `img.tensor()` / `Image.fromtensor(t, mode)` | the **tensor bridge** — drop to raw `(H,W,C)` and back |
 | `img.tolist()` | a nested List of Integer pixels |
 | `Image.blend(a, b, alpha)` | linear cross-fade of two same-size images |
@@ -94,16 +116,16 @@ The module object *is* the `Image` namespace, so it reads just like `from PIL im
 ## ImageOps, ImageFilter, ImageDraw
 
 ```kirito
-var ImageOps = import("imageops")
+var ImageOps = import("img_ops")
 # invert, grayscale, mirror, flip, posterize(bits), solarize(threshold), autocontrast(cutoff),
 # equalize, expand(border, fill), colorize(black, white), scale(factor), fit(size)
 
-var ImageFilter = import("imagefilter")
+var ImageFilter = import("img_filter")
 # kernels: BLUR, SHARPEN, SMOOTH, SMOOTH_MORE, DETAIL, EDGE_ENHANCE(_MORE), FIND_EDGES, EMBOSS, CONTOUR
 # parametric: GaussianBlur(radius), BoxBlur(radius), MedianFilter(size), MinFilter(size), MaxFilter(size)
 # custom:     Kernel(size, flat_kernel[, scale[, offset]])
 
-var ImageDraw = import("imagedraw")
+var ImageDraw = import("img_draw")
 var d = ImageDraw.Draw(img)
 d.line([0, 0, 99, 99], [255, 0, 0])
 d.rectangle([10, 10, 40, 30], [0, 0, 80], [255, 255, 0])   # fill, outline
@@ -141,8 +163,8 @@ operation is element assignment (`t[i, j] = v`), and that is exactly what `putpi
 | PNG | ✓ | ✓ | 8-bit, colour types 0/2/6 (L/RGB/RGBA); decodes all five scanline filters incl. Paeth; zlib via the stdlib |
 | PPM/PGM | ✓ | ✓ | binary Netpbm (P6/P5); handles `#` comments on read |
 | BMP | ✓ | ✓ | 24-bit uncompressed, bottom-up BGR |
-| JPEG | ✓ | — | baseline (sequential-DCT, Huffman); grey + YCbCr 4:4:4/4:2:2/4:2:0, restart markers (`jpeg.ki`) |
-| GIF | ✓ | — | GIF87a/89a, static + animated (LZW, palette, interlace, transparency, disposal) (`gif.ki`) |
+| JPEG | ✓ | — | baseline (sequential-DCT, Huffman); grey + YCbCr 4:4:4/4:2:2/4:2:0, restart markers (`_img_o6769_jpeg.ki`) |
+| GIF | ✓ | — | GIF87a/89a, static + animated (LZW, palette, interlace, transparency, disposal) (`_img_o6769_gif.ki`) |
 
 PNG is the interesting one: encoding writes signature + IHDR + zlib-compressed filtered scanlines +
 IEND, with CRC-32 per chunk (both from the `zlib` and `hash` stdlib modules); decoding parses the
@@ -152,11 +174,11 @@ matmuls per block) and a vectorised YCbCr→RGB — which is what makes MJPEG vi
 
 ## Video — an OpenCV-style `VideoCapture`
 
-`video.ki` reads video as a sequence of frames, in the spirit of `cv2.VideoCapture`, for every source
-that is decodable in pure Kirito (no external codec):
+`img_video.ki` reads video as a sequence of frames, in the spirit of `cv2.VideoCapture`, for every
+source that is decodable in pure Kirito (no external codec):
 
 ```kirito
-var cv = import("video")
+var cv = import("img_video")
 var cap = cv.VideoCapture("clip.mjpeg")        # or "anim.gif", "clip.y4m", "frames/f_%04d.png",
                                                 #    or "http://camera/stream" (MJPEG over HTTP)
 io.print(cap.get(cv.CAP_PROP_FRAME_COUNT), cap.width, cap.height, cap.get(cv.CAP_PROP_FPS))
@@ -164,7 +186,7 @@ while True:
     var ok_frame = cap.read()                   # [ok, Image]
     if not ok_frame[0]:
         break
-    discard ok_frame[1].filter(import("imagefilter").FIND_EDGES)   # frames are imaging Images
+    discard ok_frame[1].filter(import("img_filter").FIND_EDGES)   # frames are img_image Images
 cap.release()
 # or: for frame in cap: ...
 ```

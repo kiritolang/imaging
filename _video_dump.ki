@@ -1,6 +1,6 @@
 # _video_dump.ki -- helper for compare_video_pillow.py: open the source in arglist[0], save up to
 # arglist[2] frames as PPM to the arglist[1] prefix, print the frame count. Not a standalone test.
-var cv = import("video")
+var cv = import("img_video")
 var io = import("io")
 
 var src = arglist[0]

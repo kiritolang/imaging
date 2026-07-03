@@ -100,7 +100,7 @@ def main():
         pil.convert(mode).save(os.path.join(rt, f"pil_{mode}.png"))
     # A Kirito snippet decodes each and re-saves as PPM (lossless) for PIL to compare.
     snippet = (
-        'var Image = import("imaging")\n'
+        'var Image = import("img_image")\n'
         'var io = import("io")\n'
         'var path = import("path")\n'
         'for m in ["RGB", "RGBA", "L"]:\n'

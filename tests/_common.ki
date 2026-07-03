@@ -1,0 +1,79 @@
+# _common.ki -- shared helpers for the tests/ suite. Not a test itself (leading underscore).
+#
+# Every test file:
+#   var C = import("_common")
+#   var suite = C.Suite("suite-name")
+#   suite.eq("check name", 1 + 1, 2)
+#   suite.throws("bad crop", Function(): im.crop([0, 0, 999, 999]))
+#   suite.done()                              # prints "<n> checks passed" + "ALL TESTS PASSED"
+#
+# A test aborts on the first failure (via assert), so the last line of every green run is
+# guaranteed to be `ALL TESTS PASSED` -- what run_tests.sh looks for.
+
+class Suite:
+    var _init_ = Function(self, name):
+        self.name = name
+        self.n = 0
+
+    var _label = Function(self, msg):
+        return self.name + ": " + msg
+
+    # Structural equality check. `a` and `b` may be scalars, lists, dicts, ...
+    var eq = Function(self, msg, a, b):
+        if a != b:
+            throw self._label(msg) + " -- expected " + String(b) + ", got " + String(a)
+        self.n = self.n + 1
+
+    var ne = Function(self, msg, a, b):
+        if a == b:
+            throw self._label(msg) + " -- expected " + String(a) + " != " + String(b)
+        self.n = self.n + 1
+
+    # For floating-point close-enough comparisons.
+    var close = Function(self, msg, a, b, eps):
+        var diff = a - b
+        if diff < 0.0:
+            diff = -diff
+        if diff > eps:
+            throw self._label(msg) + " -- |" + String(a) + " - " + String(b) + "| = " + String(diff) + " > " + String(eps)
+        self.n = self.n + 1
+
+    var truthy = Function(self, msg, cond):
+        if not cond:
+            throw self._label(msg) + " -- expected truthy"
+        self.n = self.n + 1
+
+    var falsy = Function(self, msg, cond):
+        if cond:
+            throw self._label(msg) + " -- expected falsy"
+        self.n = self.n + 1
+
+    # Assert `fn()` raises. If `substr` is a String (not None), it must appear in the exception.
+    var throws = Function(self, msg, fn, substr = None):
+        var raised = False
+        var got = ""
+        try:
+            fn()
+        catch as e:
+            raised = True
+            got = String(e)
+        if not raised:
+            throw self._label(msg) + " -- expected throw, none happened"
+        if substr != None and got.find(substr) < 0:
+            throw self._label(msg) + " -- expected throw containing '" + substr + "', got '" + got + "'"
+        self.n = self.n + 1
+
+    # Assert `fn()` does NOT raise. Handy for smoke-checking a happy path.
+    var passes = Function(self, msg, fn):
+        try:
+            fn()
+        catch as e:
+            throw self._label(msg) + " -- unexpected throw: " + String(e)
+        self.n = self.n + 1
+
+    var done = Function(self):
+        var io = import("io")
+        io.print(self.name + ": " + String(self.n) + " checks passed")
+        io.print("ALL TESTS PASSED")
+
+# Convenience factory: `C.Suite("name")` reads naturally in test files.

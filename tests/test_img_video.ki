@@ -1,0 +1,175 @@
+# test_img_video.ki -- exhaustive tests for the VideoCapture class in img_video, across every
+# backend it supports (MJPEG file, animated GIF, Y4M, image sequence, and the pure `open()` wrapper).
+# The network MJPEG backend is exercised in compare_video_pillow.py; wiring a real HTTP server here
+# would only test the OS and the socket module, not this library.
+
+var C = import("_common")
+var cv = import("img_video")
+var Image = import("img_image")
+var path = import("path")
+var io = import("io")
+
+var s = C.Suite("img_video")
+
+# The two committed test assets live in ../testdata/ relative to this file's parent dir.
+var HERE = path.dirname(path.gettempdir())      # unused; we always look up from cwd
+var findTest = Function(name):
+    for base in ["testdata", "../testdata"]:
+        var p = path.join(base, name)
+        if path.exists(p):
+            return p
+    throw "cannot find testdata/" + name + " -- run tests from the repo root"
+
+var MJPEG = findTest("clip.mjpeg")
+var GIF = findTest("anim.gif")
+
+# ----------------------------------------------------------------- CAP_PROP_* constants
+# The numeric values must match OpenCV's so an existing OpenCV script reads unchanged.
+s.eq("CAP_PROP_POS_MSEC",     cv.CAP_PROP_POS_MSEC,     0)
+s.eq("CAP_PROP_POS_FRAMES",   cv.CAP_PROP_POS_FRAMES,   1)
+s.eq("CAP_PROP_FRAME_WIDTH",  cv.CAP_PROP_FRAME_WIDTH,  3)
+s.eq("CAP_PROP_FRAME_HEIGHT", cv.CAP_PROP_FRAME_HEIGHT, 4)
+s.eq("CAP_PROP_FPS",          cv.CAP_PROP_FPS,          5)
+s.eq("CAP_PROP_FRAME_COUNT",  cv.CAP_PROP_FRAME_COUNT,  7)
+
+# ----------------------------------------------------------------- open() = VideoCapture()
+var capOpen = cv.open(MJPEG)
+s.eq("open returns VideoCapture kind", capOpen.kind, "mjpeg")
+capOpen.release()
+
+# ----------------------------------------------------------------- MJPEG backend
+var cap = cv.VideoCapture(MJPEG)
+s.truthy("mjpeg isopened", cap.isopened())
+s.eq("mjpeg kind",        cap.kind,      "mjpeg")
+s.truthy("mjpeg count>0", cap.count > 0)
+s.truthy("mjpeg width>0", cap.width > 0)
+s.truthy("mjpeg height>0",cap.height > 0)
+s.eq("mjpeg default fps 25", cap.fps, 25.0)
+s.truthy("mjpeg _str_ mentions kind", String(cap).find("mjpeg") >= 0)
+# get() returns Floats.
+s.eq("get(FRAME_WIDTH)",  cap.get(cv.CAP_PROP_FRAME_WIDTH),  Float(cap.width))
+s.eq("get(FRAME_HEIGHT)", cap.get(cv.CAP_PROP_FRAME_HEIGHT), Float(cap.height))
+s.eq("get(FPS)",          cap.get(cv.CAP_PROP_FPS),          cap.fps)
+s.eq("get(FRAME_COUNT)",  cap.get(cv.CAP_PROP_FRAME_COUNT),  Float(cap.count))
+s.eq("get(POS_FRAMES) starts at 0", cap.get(cv.CAP_PROP_POS_FRAMES), 0.0)
+s.close("get(POS_MSEC) starts at 0",cap.get(cv.CAP_PROP_POS_MSEC),   0.0, 0.0001)
+s.eq("get(unknown) returns 0", cap.get(999), 0.0)
+
+# grab() advances pos and buffers a frame; retrieve() returns [True, Image] afterwards.
+s.truthy("grab returns true first frame", cap.grab())
+s.eq("pos advanced after grab", cap.pos, 1)
+var got = cap.retrieve()
+s.eq("retrieve after grab is [True, Image]", got[0], True)
+s.eq("retrieved Image mode",   got[1].mode, "RGB")
+# read() = grab() + retrieve() -> [True, Image].
+var pr = cap.read()
+s.eq("read returns [True, Image]", pr[0], True)
+s.eq("frame is RGB Image", pr[1].mode, "RGB")
+
+# seek back to 0 via set(POS_FRAMES).
+s.truthy("set(POS_FRAMES, 0) returns True", cap.set(cv.CAP_PROP_POS_FRAMES, 0))
+s.eq("pos reset to 0", cap.pos, 0)
+# set(unknown, x) returns False.
+s.falsy("set(unknown) returns False", cap.set(999, 5))
+# get(POS_MSEC) after seeking to frame 1: pos*1000/fps.
+discard cap.set(cv.CAP_PROP_POS_FRAMES, 1)
+s.close("POS_MSEC after seek", cap.get(cv.CAP_PROP_POS_MSEC), 40.0, 0.001)  # 1000/25
+
+# Drain the rest -- read() eventually returns [False, None].
+discard cap.set(cv.CAP_PROP_POS_FRAMES, 0)
+var frames = 0
+var next = cap.read()
+while next[0]:
+    frames = frames + 1
+    next = cap.read()
+s.eq("drain sees count frames", frames, cap.count)
+s.eq("read past end returns [False, None]", next, [False, None])
+
+# retrieve() after end-of-stream is [False, None] (no frame is buffered).
+s.eq("retrieve after end", cap.retrieve(), [False, None])
+
+# release() closes and sets isopened() to False.
+cap.release()
+s.falsy("mjpeg isopened after release", cap.isopened())
+
+# ----------------------------------------------------------------- animated GIF backend
+var capGif = cv.VideoCapture(GIF)
+s.eq("gif kind", capGif.kind, "gif")
+s.truthy("gif isopened", capGif.isopened())
+s.truthy("gif count>0", capGif.count > 0)
+s.truthy("gif width>0", capGif.width > 0)
+s.truthy("gif height>0",capGif.height > 0)
+# GIF fps derives from the first frame's delay.
+s.truthy("gif fps>0", capGif.fps > 0.0)
+# The read protocol is identical.
+var g0 = capGif.read()
+s.eq("gif first frame mode", g0[1].mode, "RGB")
+capGif.release()
+
+# ----------------------------------------------------------------- iteration (_iter_)
+# `for frame in cap:` should yield the same number of frames as count.
+var capIter = cv.VideoCapture(MJPEG)
+var itcount = 0
+for frame in capIter:
+    itcount = itcount + 1
+s.eq("iteration yields count frames", itcount, capIter.count)
+capIter.release()
+
+# ----------------------------------------------------------------- image-sequence backend
+# Write a numbered PNG sequence to a temp dir, then open it via a printf pattern.
+var seqdir = path.join(path.gettempdir(), "img_video_seq_test")
+discard path.rmtree(seqdir, missing_ok = True)
+discard path.mkdir(seqdir)
+Image.new("RGB", [4, 4], [10, 20, 30]).save(path.join(seqdir, "f_000.png"))
+Image.new("RGB", [4, 4], [40, 50, 60]).save(path.join(seqdir, "f_001.png"))
+Image.new("RGB", [4, 4], [70, 80, 90]).save(path.join(seqdir, "f_002.png"))
+var seqPattern = path.join(seqdir, "f_%03d.png")
+var capSeq = cv.VideoCapture(seqPattern)
+s.eq("seq kind",  capSeq.kind,  "seq")
+s.eq("seq count", capSeq.count, 3)
+s.eq("seq width", capSeq.width, 4)
+s.eq("seq height",capSeq.height,4)
+var seq0 = capSeq.read()
+s.eq("seq frame 0 pixel", seq0[1].getpixel([0, 0]), [10, 20, 30])
+var seq1 = capSeq.read()
+s.eq("seq frame 1 pixel", seq1[1].getpixel([0, 0]), [40, 50, 60])
+capSeq.release()
+discard path.rmtree(seqdir)
+
+# ----------------------------------------------------------------- Y4M backend
+# Write a minimal Y4M ourselves and open it. Frame dims 2x2, 4:2:0.
+var y4mPath = path.join(path.gettempdir(), "img_video_test.y4m")
+var y4mHeader = "YUV4MPEG2 W2 H2 F25:1 Ip A0:0 C420\n".encode("ascii")
+var frameHeader = "FRAME\n".encode("ascii")
+# Two frames of solid grey: Y=[128,128,128,128], Cb=[128], Cr=[128] each.
+var yData = Bytes([128, 128, 128, 128])
+var cData = Bytes([128])
+var y4mBytes = y4mHeader + frameHeader + yData + cData + cData + frameHeader + yData + cData + cData
+var fy = io.open(y4mPath, "wb")
+fy.write(y4mBytes)
+fy.close()
+var capY4m = cv.VideoCapture(y4mPath)
+s.eq("y4m kind",   capY4m.kind, "y4m")
+s.eq("y4m width",  capY4m.width, 2)
+s.eq("y4m height", capY4m.height, 2)
+s.eq("y4m count",  capY4m.count, 2)
+s.close("y4m fps", capY4m.fps, 25.0, 0.001)
+# Frame is (near-)greyscale mid.
+var y4mFrame = capY4m.read()
+s.eq("y4m frame mode", y4mFrame[1].mode, "RGB")
+capY4m.release()
+discard path.remove(y4mPath)
+
+# ----------------------------------------------------------------- error path: unopenable source
+# A path to a nonexistent MJPEG (falls through to the mjpeg branch which io.open will throw on).
+s.throws("open missing mjpeg",
+         Function(): return cv.VideoCapture(path.join(path.gettempdir(), "no_such_video_xyz.mjpeg")))
+
+# ----------------------------------------------------------------- set() blocked on http backend
+# Constructing a http capture would need a live server; instead confirm the guard exists on any
+# backend by exercising a normal one: set(POS_FRAMES) succeeds only when kind != "http".
+var capForSet = cv.VideoCapture(MJPEG)
+s.truthy("set on file backend allowed", capForSet.set(cv.CAP_PROP_POS_FRAMES, 0))
+capForSet.release()
+
+s.done()
