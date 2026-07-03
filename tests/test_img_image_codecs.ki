@@ -1,0 +1,191 @@
+# test_img_image_codecs.ki -- byte-level round-trips for every codec built into img_image
+# (PNG, PPM/PGM, BMP), plus adversarial garbage / truncation / unsupported-variant handling.
+# JPEG and GIF are decode-only and are covered in test_internal_codecs.ki.
+
+var C = import("_common")
+var Image = import("img_image")
+var T = import("tensor")
+var path = import("path")
+var io = import("io")
+
+var s = C.Suite("img_image codecs")
+
+# Build a deterministic test image with a distinct value per (y, x, c) so a codec bug in row/column
+# ordering surfaces immediately as wrong pixels.
+var makeRGB = Function(w, h):
+    var rows = []
+    var y = 0
+    while y < h:
+        var row = []
+        var x = 0
+        while x < w:
+            row.append([(y * 7 + x) % 256, (y * 11 + x * 3) % 256, (y * 13 + x * 5) % 256])
+            x = x + 1
+        rows.append(row)
+        y = y + 1
+    return Image.fromtensor(T.Tensor(rows), "RGB")
+
+var makeL = Function(w, h):
+    var rows = []
+    var y = 0
+    while y < h:
+        var row = []
+        var x = 0
+        while x < w:
+            row.append([(y * 17 + x * 3) % 256])
+            x = x + 1
+        rows.append(row)
+        y = y + 1
+    return Image.fromtensor(T.Tensor(rows), "L")
+
+var makeRGBA = Function(w, h):
+    var rows = []
+    var y = 0
+    while y < h:
+        var row = []
+        var x = 0
+        while x < w:
+            row.append([(y * 7 + x) % 256,
+                        (y * 11 + x * 3) % 256,
+                        (y * 13 + x * 5) % 256,
+                        (y * 19 + x * 2) % 256])
+            x = x + 1
+        rows.append(row)
+        y = y + 1
+    return Image.fromtensor(T.Tensor(rows), "RGBA")
+
+# `imagesEqual`: exact per-pixel comparison (Bool).
+var imagesEqual = Function(a, b):
+    if a.mode != b.mode or a.width != b.width or a.height != b.height:
+        return False
+    var y = 0
+    while y < a.height:
+        var x = 0
+        while x < a.width:
+            if a.getpixel([x, y]) != b.getpixel([x, y]):
+                return False
+            x = x + 1
+        y = y + 1
+    return True
+
+# ----------------------------------------------------------------- PNG round-trip: L / RGB / RGBA
+var srcL = makeL(9, 5)
+s.eq("PNG L roundtrip", imagesEqual(srcL, Image.frombytes(srcL.tobytes("png"))), True)
+var srcRGB = makeRGB(9, 5)
+s.eq("PNG RGB roundtrip", imagesEqual(srcRGB, Image.frombytes(srcRGB.tobytes("png"))), True)
+var srcRGBA = makeRGBA(9, 5)
+s.eq("PNG RGBA roundtrip", imagesEqual(srcRGBA, Image.frombytes(srcRGBA.tobytes("png"))), True)
+
+# 1x1 PNG (degenerate but valid) round-trips.
+s.eq("PNG 1x1 L",   imagesEqual(makeL(1, 1),    Image.frombytes(makeL(1, 1).tobytes("png"))), True)
+s.eq("PNG 1x1 RGB", imagesEqual(makeRGB(1, 1),  Image.frombytes(makeRGB(1, 1).tobytes("png"))), True)
+
+# Encoded PNG must start with the standard 8-byte signature.
+var blob = Image.new("RGB", [2, 2]).tobytes("png")
+s.eq("PNG signature (0)", blob[0], 137)
+s.eq("PNG signature (1)", blob[1], 80)
+s.eq("PNG signature (2)", blob[2], 78)
+s.eq("PNG signature (3)", blob[3], 71)
+
+# The `filter` byte before each scanline stays 0 (none) in our encoder; a decode that ignores
+# filters would still round-trip. Verify decoder handles ALL PNG filter types by rewriting the raw
+# scanlines with filter type 1 (Sub) via a manual re-inject test: instead of reconstructing PNG,
+# we just verify that decoding what we produce is exact -- the full-filter check is done via
+# compare_pillow.py's PNGs authored by Pillow.
+
+# Adversarial PNGs:
+# - unsupported bit depth (16-bit PNG). Craft a minimal IHDR with bitdepth 16.
+var _u32be = Function(n):
+    return Bytes([n // 16777216 % 256, n // 65536 % 256, n // 256 % 256, n % 256])
+var makeIhdrOnly = Function(bitdepth, colortype):
+    # PNG sig + IHDR chunk with a nonsense body and one bogus IDAT to hit the branch that reads it.
+    var sig = Bytes([137, 80, 78, 71, 13, 10, 26, 10])
+    var body = _u32be(1) + _u32be(1) + Bytes([bitdepth, colortype, 0, 0, 0])
+    var hash = import("hash")
+    var ihdr = "IHDR".encode("ascii") + body
+    var crc = _u32be(hash.crc32(ihdr))
+    return sig + _u32be(13) + ihdr + crc
+s.throws("PNG rejects 16-bit depth",
+         Function(): return Image.frombytes(makeIhdrOnly(16, 2)),
+         "only 8-bit")
+# - unsupported palette color type 3.
+s.throws("PNG rejects palette color type",
+         Function(): return Image.frombytes(makeIhdrOnly(8, 3)),
+         "unsupported color type")
+
+# Truncated PNG (only the signature) reaches the IDAT branch with an empty IDAT, which zlib rejects.
+s.throws("PNG rejects truncated (sig only)",
+         Function(): return Image.frombytes(Bytes([137, 80, 78, 71, 13, 10, 26, 10])))
+
+# ----------------------------------------------------------------- PPM / PGM round-trip
+s.eq("PPM RGB roundtrip",  imagesEqual(srcRGB, Image.frombytes(srcRGB.tobytes("ppm"))), True)
+s.eq("PGM L roundtrip",    imagesEqual(srcL,   Image.frombytes(srcL.tobytes("pgm"))),   True)
+# RGBA is saved through the PPM encoder as its RGB channels only (alpha is dropped).
+var savedRGBA_as_PPM = Image.frombytes(srcRGBA.tobytes("ppm"))
+s.eq("PPM(RGBA) drops alpha, mode is RGB", savedRGBA_as_PPM.mode, "RGB")
+s.eq("PPM(RGBA) RGB pixels preserved",
+     savedRGBA_as_PPM.getpixel([2, 2]),
+     [srcRGBA.getpixel([2, 2])[0], srcRGBA.getpixel([2, 2])[1], srcRGBA.getpixel([2, 2])[2]])
+
+# Header parser: comment lines between fields are legal per Netpbm.
+var pnm_with_comments = Function():
+    var body = Image.new("RGB", [2, 1], [10, 20, 30]).tobytes("ppm")
+    # Insert a comment line between magic and the width/height token.
+    var i = 2                                     # after "P6"
+    return body[0:i] + Bytes([10]) + "# a comment\n".encode("ascii") + body[i + 1:]
+var withc = Image.frombytes(pnm_with_comments())
+s.eq("PPM comment tolerated: size", withc.size, [2, 1])
+s.eq("PPM comment tolerated: pixel", withc.getpixel([0, 0]), [10, 20, 30])
+
+# Adversarial: an unsupported PNM variant (P4 bitmap) is rejected.
+s.throws("PNM rejects P4",
+         Function(): return Image.frombytes("P4\n1 1\n\x00".encode("latin-1")),
+         "only binary")
+# A totally malformed PNM (magic OK, no dimensions) simply won't reach the pixel section; the tail
+# loop guards against overrun since it counts W*H*C bytes.
+
+# ----------------------------------------------------------------- BMP round-trip
+s.eq("BMP RGB roundtrip", imagesEqual(srcRGB, Image.frombytes(srcRGB.tobytes("bmp"))), True)
+# BMP is inherently RGB; encoding an L image expands to RGB before writing, then decodes as RGB.
+var bmpFromL = Image.frombytes(makeL(4, 3).tobytes("bmp"))
+s.eq("BMP(L) round-trips as RGB", bmpFromL.mode, "RGB")
+s.eq("BMP(L) grey channel preserved",
+     bmpFromL.getpixel([2, 2])[0], makeL(4, 3).getpixel([2, 2]))
+# BMP row padding: width 5 gives 15-byte rows, padded to 16. The decoder must skip the pad.
+var pad_src = Image.new("RGB", [5, 3], [42, 84, 126])
+s.eq("BMP width-not-multiple-of-4 roundtrip",
+     imagesEqual(pad_src, Image.frombytes(pad_src.tobytes("bmp"))),
+     True)
+# A non-24-bit BMP is not supported by the decoder.
+s.throws("BMP rejects unusual bpp",
+         Function(): return Image.frombytes(Bytes([66, 77, 0, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0, 40, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 1, 0, 8, 0])),
+         "only 24-bit")
+
+# ----------------------------------------------------------------- save() format sniff & error paths
+var tmp = path.join(path.gettempdir(), "codec_test_out")
+discard path.mkdir(tmp, exist_ok = True)
+var png_path = path.join(tmp, "out.png")
+Image.new("RGB", [4, 4], [5, 15, 25]).save(png_path)
+s.eq("save infers PNG from ext",
+     Image.open(png_path).getpixel([0, 0]), [5, 15, 25])
+# Explicit format overrides the extension.
+var bmp_named_png = path.join(tmp, "actually_bmp.png")
+Image.new("RGB", [4, 4], [100, 100, 100]).save(bmp_named_png, "bmp")
+# The file on disk is BMP bytes, not PNG bytes -- the extension is a lie because we forced format="bmp".
+var explicit_f = io.open(bmp_named_png, "rb")
+var explicit_bytes = explicit_f.read()
+explicit_f.close()
+s.eq("save explicit format overrides ext (BMP magic)",
+     explicit_bytes[0:2], Bytes([66, 77]))                          # "BM"
+s.eq("save explicit format overrides ext (decode)",
+     Image.frombytes(explicit_bytes).getpixel([0, 0]), [100, 100, 100])
+# save() rejects a path with no extension and no explicit format.
+s.throws("save rejects path without ext",
+         Function(): return Image.new("L", [1, 1]).save(path.join(tmp, "noext")),
+         "cannot infer format")
+s.throws("save rejects unsupported ext",
+         Function(): return Image.new("L", [1, 1]).save(path.join(tmp, "x.foobar")),
+         "unsupported save format")
+discard path.rmtree(tmp)
+
+s.done()

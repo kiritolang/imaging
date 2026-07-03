@@ -1,0 +1,155 @@
+# test_img_filter.ki -- exhaustive tests for every filter class and constant in img_filter.
+#
+# Each filter exposes `apply(tensor) -> tensor` and is passed through img.filter(...). We build
+# minimum-sized images with a single "spike" pixel so the effect of a kernel is easy to reason
+# about: e.g. FIND_EDGES turns a spike into a bright cluster; BLUR spreads it; SHARPEN amplifies it.
+
+var C = import("_common")
+var Image = import("img_image")
+var ImageFilter = import("img_filter")
+
+var s = C.Suite("img_filter")
+
+# A 5x5 "L" canvas with a bright spike at the centre and zero elsewhere.
+var makeSpike = Function(size, mid, edge):
+    var im = Image.new("L", [size, size], edge)
+    im.putpixel([size // 2, size // 2], mid)
+    return im
+
+# ----------------------------------------------------------------- Kernel class
+# Constructor validates size*size vs len(kernel).
+s.throws("Kernel rejects size mismatch",
+         Function(): return ImageFilter.Kernel(3, [1, 2, 3, 4]),
+         "kernel length")
+# Default scale = sum of kernel (or 1 if sum == 0).
+var k_default = ImageFilter.Kernel(3, [0, 1, 0, 1, 4, 1, 0, 1, 0])
+s.eq("Kernel default scale is sum", k_default.scale, 8)
+var k_zerosum = ImageFilter.Kernel(3, [1, -1, 0, 0, 0, 0, 0, 0, 0])
+s.eq("Kernel zero-sum uses scale=1", k_zerosum.scale, 1)
+# Explicit scale + offset survive round-trip.
+var kExplicit = ImageFilter.Kernel(3, [1, 1, 1, 1, 1, 1, 1, 1, 1], 9, 5)
+s.eq("Kernel explicit scale", kExplicit.scale, 9)
+s.eq("Kernel explicit offset", kExplicit.offset, 5)
+# _str_ contains the kernel size.
+s.truthy("Kernel _str_ mentions size",
+         String(ImageFilter.Kernel(3, [0, 0, 0, 0, 1, 0, 0, 0, 0])).find("size=3") >= 0)
+# Identity kernel (center=1, rest=0, scale=1) is a no-op that preserves the pixel exactly.
+var identity = ImageFilter.Kernel(3, [0, 0, 0, 0, 1, 0, 0, 0, 0], 1, 0)
+var spike = makeSpike(5, 200, 0)
+s.eq("identity kernel keeps center",
+     spike.filter(identity).getpixel([2, 2]),
+     200)
+s.eq("identity kernel keeps edge",
+     spike.filter(identity).getpixel([0, 0]),
+     0)
+# Uniform 3x3 with sum-based auto-scale averages a spike to 200/9 = ~22.
+s.close("uniform 3x3 averages spike",
+        Float(spike.filter(ImageFilter.Kernel(3, [1, 1, 1, 1, 1, 1, 1, 1, 1])).getpixel([2, 2])),
+        200.0 / 9.0,
+        1.0)
+# Offset shifts the whole image up by that constant (clamped to 255).
+var lift = ImageFilter.Kernel(3, [0, 0, 0, 0, 1, 0, 0, 0, 0], 1, 42)
+s.eq("Kernel offset lifts pixels",
+     Image.new("L", [3, 3], 100).filter(lift).getpixel([1, 1]),
+     142)
+# Offset clamps to 255 rather than overflowing.
+s.eq("Kernel offset clamps high",
+     Image.new("L", [3, 3], 250).filter(ImageFilter.Kernel(3, [0, 0, 0, 0, 1, 0, 0, 0, 0], 1, 50))
+                                .getpixel([1, 1]),
+     255)
+
+# ----------------------------------------------------------------- BoxBlur
+var bb1 = ImageFilter.BoxBlur(1)
+s.eq("BoxBlur radius attribute", bb1.radius, 1)
+s.truthy("BoxBlur _str_ mentions radius",
+         String(bb1).find("radius=1") >= 0)
+# Radius 1 averages a 3x3 window; the spike at 200 dilutes to ~22 in the centre.
+s.close("BoxBlur r=1 averages spike",
+        Float(spike.filter(bb1).getpixel([2, 2])),
+        200.0 / 9.0,
+        1.0)
+# BoxBlur applied to a solid image leaves it unchanged (edge-padded so borders are stable).
+s.eq("BoxBlur solid unchanged",
+     Image.new("L", [4, 4], 50).filter(bb1).getpixel([1, 1]),
+     50)
+
+# ----------------------------------------------------------------- GaussianBlur
+var gb1 = ImageFilter.GaussianBlur(1)
+s.eq("GaussianBlur radius attribute", gb1.radius, 1)
+s.truthy("GaussianBlur _str_ mentions radius",
+         String(gb1).find("radius=1") >= 0)
+# The Gaussian sum sums to 1 so a solid image is left unchanged.
+s.eq("GaussianBlur solid unchanged",
+     Image.new("L", [4, 4], 128).filter(gb1).getpixel([1, 1]),
+     128)
+# On a spike, the Gaussian's centre weight is highest -- output at the spike is smaller than the
+# original spike but larger than a box-blur (Gaussian concentrates more weight on the centre).
+var g_at_center = spike.filter(gb1).getpixel([2, 2])
+var b_at_center = spike.filter(bb1).getpixel([2, 2])
+s.truthy("Gaussian center > box center", g_at_center > b_at_center)
+# radius=0 is treated as 1 internally to avoid a degenerate kernel; still returns a same-shape image.
+var gb0 = ImageFilter.GaussianBlur(0)
+s.eq("GaussianBlur radius=0 still returns same size",
+     Image.new("L", [4, 4], 30).filter(gb0).size,
+     [4, 4])
+
+# ----------------------------------------------------------------- MinFilter / MaxFilter / MedianFilter
+# Rank filters: MinFilter picks the darkest neighbour, MaxFilter the brightest, MedianFilter the middle.
+var flat50 = Image.new("L", [3, 3], 50)
+flat50.putpixel([1, 1], 200)                    # one bright spike among 50s
+s.eq("MaxFilter default size is 3",
+     ImageFilter.MaxFilter().size, 3)
+s.eq("MaxFilter promotes spike outward",
+     flat50.filter(ImageFilter.MaxFilter(3)).getpixel([0, 0]),
+     200)                                        # centre spike diffuses to corner (3x3 window)
+s.eq("MinFilter erases spike",
+     flat50.filter(ImageFilter.MinFilter(3)).getpixel([1, 1]),
+     50)                                         # min over 3x3 is 50 (neighbours dominate)
+s.eq("MedianFilter drops single-pixel spike",
+     flat50.filter(ImageFilter.MedianFilter(3)).getpixel([1, 1]),
+     50)                                         # median of {200, 50*8} = 50
+
+# ----------------------------------------------------------------- built-in kernel constants
+# Every constant is a Kernel with the documented size. Just verify their shapes / attributes.
+var checkKernel = Function(name, k, want_size):
+    s.eq("kernel " + name + " is Kernel", type(k), "Kernel")
+    s.eq("kernel " + name + " size",       k.size,  want_size)
+    s.eq("kernel " + name + " length",     len(k.kernel), want_size * want_size)
+checkKernel("BLUR",              ImageFilter.BLUR,              5)
+checkKernel("SHARPEN",           ImageFilter.SHARPEN,           3)
+checkKernel("SMOOTH",            ImageFilter.SMOOTH,            3)
+checkKernel("SMOOTH_MORE",       ImageFilter.SMOOTH_MORE,       5)
+checkKernel("DETAIL",            ImageFilter.DETAIL,            3)
+checkKernel("EDGE_ENHANCE",      ImageFilter.EDGE_ENHANCE,      3)
+checkKernel("EDGE_ENHANCE_MORE", ImageFilter.EDGE_ENHANCE_MORE, 3)
+checkKernel("FIND_EDGES",        ImageFilter.FIND_EDGES,        3)
+checkKernel("EMBOSS",            ImageFilter.EMBOSS,            3)
+checkKernel("CONTOUR",           ImageFilter.CONTOUR,           3)
+
+# Semantic checks on the kernels: applied to a solid image, most Pillow-scaled kernels leave it
+# unchanged (they sum to their scale, so the average is 1x). SHARPEN, DETAIL, EDGE_ENHANCE keep a
+# solid patch identical because their (centre - 8*neighbour) / scale is (centre - centre) / scale ==
+# 0-away-from-centre and equal at centre -> same value. Verify a few:
+var solid = Image.new("L", [4, 4], 100)
+s.eq("BLUR keeps solid",       solid.filter(ImageFilter.BLUR      ).getpixel([1, 1]), 100)
+s.eq("SMOOTH keeps solid",     solid.filter(ImageFilter.SMOOTH    ).getpixel([1, 1]), 100)
+s.eq("SHARPEN keeps solid",    solid.filter(ImageFilter.SHARPEN   ).getpixel([1, 1]), 100)
+s.eq("SMOOTH_MORE keeps solid",solid.filter(ImageFilter.SMOOTH_MORE).getpixel([1, 1]), 100)
+# FIND_EDGES on a solid image -> everything is 0 (no edges anywhere).
+s.eq("FIND_EDGES solid -> 0",  solid.filter(ImageFilter.FIND_EDGES).getpixel([1, 1]), 0)
+# CONTOUR = FIND_EDGES + offset 255 -> everything is 255 on a solid image.
+s.eq("CONTOUR solid -> 255",   solid.filter(ImageFilter.CONTOUR   ).getpixel([1, 1]), 255)
+# EMBOSS: solid stays around 128 (offset=128, all differences are 0).
+s.eq("EMBOSS solid -> offset", solid.filter(ImageFilter.EMBOSS    ).getpixel([1, 1]), 128)
+
+# On a spike, FIND_EDGES lights up the spike pixel itself (8*centre - 0*neighbours ~= 8*value clamped).
+var sp = makeSpike(5, 200, 0)
+s.eq("FIND_EDGES spike centre saturates",
+     sp.filter(ImageFilter.FIND_EDGES).getpixel([2, 2]),
+     255)
+# The immediate neighbour goes to 0 (negative from -sum(neighbours) is clamped).
+s.eq("FIND_EDGES spike neighbour clamps low",
+     sp.filter(ImageFilter.FIND_EDGES).getpixel([2, 1]),
+     0)
+
+s.done()

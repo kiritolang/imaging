@@ -1,0 +1,164 @@
+# test_img_ops.ki -- exhaustive tests for every function in img_ops (Pillow's ImageOps).
+
+var C = import("_common")
+var Image = import("img_image")
+var ImageOps = import("img_ops")
+var T = import("tensor")
+
+var s = C.Suite("img_ops")
+
+# ----------------------------------------------------------------- invert
+# Colour channels are mirrored around 128; alpha is preserved untouched.
+var solid = Image.new("RGB", [2, 2], [10, 20, 30])
+var inv = ImageOps.invert(solid)
+s.eq("invert RGB", inv.getpixel([0, 0]), [245, 235, 225])
+# Endpoints: 0 -> 255 and 255 -> 0.
+s.eq("invert 0",   ImageOps.invert(Image.new("L", [1, 1], 0)).getpixel([0, 0]),   255)
+s.eq("invert 255", ImageOps.invert(Image.new("L", [1, 1], 255)).getpixel([0, 0]), 0)
+# RGBA: colour channels inverted, alpha kept.
+var solidA = Image.new("RGBA", [1, 1], [10, 20, 30, 128])
+s.eq("invert RGBA preserves alpha",
+     ImageOps.invert(solidA).getpixel([0, 0]),
+     [245, 235, 225, 128])
+# L mode also inverts cleanly.
+s.eq("invert L", ImageOps.invert(Image.new("L", [1, 1], 40)).getpixel([0, 0]), 215)
+
+# ----------------------------------------------------------------- grayscale / greyscale
+var rgbW = Image.new("RGB", [1, 1], [255, 255, 255])
+s.eq("grayscale mode", ImageOps.grayscale(rgbW).mode, "L")
+s.eq("grayscale white -> 255", ImageOps.grayscale(rgbW).getpixel([0, 0]), 255)
+s.eq("greyscale alias exists", ImageOps.greyscale(rgbW).getpixel([0, 0]),
+                               ImageOps.grayscale(rgbW).getpixel([0, 0]))
+
+# ----------------------------------------------------------------- mirror / flip
+var q = Image.new("L", [2, 2])
+q.putpixel([0, 0], 10)
+q.putpixel([1, 0], 20)
+q.putpixel([0, 1], 30)
+q.putpixel([1, 1], 40)
+s.eq("mirror = FLIP_LEFT_RIGHT", ImageOps.mirror(q).getpixel([0, 0]), 20)
+s.eq("flip   = FLIP_TOP_BOTTOM", ImageOps.flip(q).getpixel([0, 0]),   30)
+
+# ----------------------------------------------------------------- posterize
+# 8-bit is the identity (mask keeps all bits).
+s.eq("posterize 8 = identity",
+     ImageOps.posterize(Image.new("L", [1, 1], 137), 8).getpixel([0, 0]),
+     137)
+# 1-bit collapses to 0/128 boundaries.
+s.eq("posterize 1 collapses low",  ImageOps.posterize(Image.new("L", [1, 1], 100), 1).getpixel([0, 0]), 0)
+s.eq("posterize 1 collapses high", ImageOps.posterize(Image.new("L", [1, 1], 200), 1).getpixel([0, 0]), 128)
+# 4-bit reduces to steps of 16.
+s.eq("posterize 4 steps",
+     ImageOps.posterize(Image.new("L", [1, 1], 137), 4).getpixel([0, 0]),
+     128)
+# Bounds: 0 and 9 are rejected.
+s.throws("posterize bits<1", Function(): return ImageOps.posterize(q, 0), "in 1..8")
+s.throws("posterize bits>8", Function(): return ImageOps.posterize(q, 9), "in 1..8")
+# Alpha is preserved.
+s.eq("posterize preserves alpha",
+     ImageOps.posterize(Image.new("RGBA", [1, 1], [200, 200, 200, 128]), 2).getpixel([0, 0])[3],
+     128)
+
+# ----------------------------------------------------------------- solarize
+# threshold=128: pixels 128..255 invert, pixels 0..127 pass through unchanged.
+s.eq("solarize below threshold", ImageOps.solarize(Image.new("L", [1, 1], 100)).getpixel([0, 0]), 100)
+s.eq("solarize at threshold",    ImageOps.solarize(Image.new("L", [1, 1], 128)).getpixel([0, 0]), 127)
+s.eq("solarize above threshold", ImageOps.solarize(Image.new("L", [1, 1], 200)).getpixel([0, 0]), 55)
+# threshold=0 means every pixel is inverted.
+s.eq("solarize threshold=0",
+     ImageOps.solarize(Image.new("L", [1, 1], 10), 0).getpixel([0, 0]),
+     245)
+# threshold=256 keeps every pixel (nothing at or above 256).
+s.eq("solarize threshold=256",
+     ImageOps.solarize(Image.new("L", [1, 1], 200), 256).getpixel([0, 0]),
+     200)
+
+# ----------------------------------------------------------------- autocontrast
+# A flat image with only one value stretches to [0, 255] only if lo != hi; a single-value image
+# keeps its channel intact (hi <= lo branch).
+s.eq("autocontrast flat unchanged",
+     ImageOps.autocontrast(Image.new("L", [4, 4], 42)).getpixel([0, 0]),
+     42)
+# A stretched image gets its darkest bin mapped to 0 and brightest to 255.
+var stretch = Image.new("L", [3, 1])
+stretch.putpixel([0, 0], 100)
+stretch.putpixel([1, 0], 128)
+stretch.putpixel([2, 0], 156)
+var st_ac = ImageOps.autocontrast(stretch)
+s.eq("autocontrast min -> 0",   st_ac.getpixel([0, 0]), 0)
+s.eq("autocontrast max -> 255", st_ac.getpixel([2, 0]), 255)
+# `cutoff` trims that percentile from each end -- with a large cutoff the effective range collapses
+# and the source is passed through unchanged (hi <= lo branch).
+s.eq("autocontrast large cutoff preserves middle",
+     ImageOps.autocontrast(stretch, 50).getpixel([1, 0]),
+     128)
+# On RGB, autocontrast operates independently per channel.
+var rgbLo = Image.new("RGB", [2, 1], [50, 100, 150])
+rgbLo.putpixel([1, 0], [100, 150, 200])
+var acRGB = ImageOps.autocontrast(rgbLo)
+s.eq("autocontrast R channel min", acRGB.getpixel([0, 0])[0], 0)
+s.eq("autocontrast R channel max", acRGB.getpixel([1, 0])[0], 255)
+
+# ----------------------------------------------------------------- equalize
+# On an already-flat histogram, equalize returns unchanged pixels (or 0, given the cdf-min branch).
+# On a two-valued image the two values spread to 0 and 255.
+var eqSrc = Image.new("L", [2, 1])
+eqSrc.putpixel([0, 0], 50)
+eqSrc.putpixel([1, 0], 200)
+var eqOut = ImageOps.equalize(eqSrc)
+s.truthy("equalize output in 0..255",
+         eqOut.getpixel([0, 0]) >= 0 and eqOut.getpixel([0, 0]) <= 255)
+s.truthy("equalize spread widens",
+         eqOut.getpixel([1, 0]) > eqOut.getpixel([0, 0]))
+
+# ----------------------------------------------------------------- expand
+var e = ImageOps.expand(Image.new("RGB", [2, 2], [10, 20, 30]), 1)
+s.eq("expand size",  e.size, [4, 4])
+s.eq("expand fill default (black)", e.getpixel([0, 0]), [0, 0, 0])
+s.eq("expand center is original",   e.getpixel([1, 1]), [10, 20, 30])
+# Non-default fill.
+var e2 = ImageOps.expand(Image.new("RGB", [1, 1], [200, 200, 200]), 2, [10, 20, 30])
+s.eq("expand fill on border", e2.getpixel([0, 0]), [10, 20, 30])
+s.eq("expand center after border", e2.getpixel([2, 2]), [200, 200, 200])
+# 0-border is a no-op (same-size result).
+s.eq("expand border 0 is same size",
+     ImageOps.expand(Image.new("L", [3, 3], 5), 0).size,
+     [3, 3])
+
+# ----------------------------------------------------------------- colorize
+# 0 -> black colour, 255 -> white colour; mid-grey lerps.
+var col_black = ImageOps.colorize(Image.new("L", [1, 1], 0),   [50, 100, 150], [200, 250, 255])
+var col_white = ImageOps.colorize(Image.new("L", [1, 1], 255), [50, 100, 150], [200, 250, 255])
+var col_mid   = ImageOps.colorize(Image.new("L", [1, 1], 128), [0, 0, 0],       [200, 200, 200])
+s.eq("colorize output mode", col_black.mode, "RGB")
+s.eq("colorize L=0 = black colour",   col_black.getpixel([0, 0]), [50, 100, 150])
+s.eq("colorize L=255 = white colour", col_white.getpixel([0, 0]), [200, 250, 255])
+s.close("colorize mid roughly midway",
+        Float(col_mid.getpixel([0, 0])[0]), 100.0, 2.0)
+# colorize also accepts an RGB input (converts to L internally).
+s.eq("colorize takes RGB input mode",
+     ImageOps.colorize(Image.new("RGB", [1, 1], [128, 128, 128]), [0, 0, 0], [255, 255, 255])
+             .mode,
+     "RGB")
+
+# ----------------------------------------------------------------- scale
+var src2x = Image.new("RGB", [4, 4], [10, 20, 30])
+s.eq("scale 2x width",  ImageOps.scale(src2x, 2.0).width,  8)
+s.eq("scale 2x height", ImageOps.scale(src2x, 2.0).height, 8)
+# scale never below 1 pixel per axis.
+s.eq("scale tiny stays 1 px",  ImageOps.scale(src2x, 0.001).width,  1)
+s.eq("scale tiny stays 1 px h", ImageOps.scale(src2x, 0.001).height, 1)
+# Bilinear preserves solid colour.
+s.eq("scale keeps solid colour",
+     ImageOps.scale(src2x, 2.5).getpixel([5, 5]),
+     [10, 20, 30])
+
+# ----------------------------------------------------------------- fit
+# Force a wide-to-square fit: source 10x5 -> 4x4 should scale so height covers 4 (scale=0.8), then
+# centre-crop the wider result to 4x4.
+var wide = Image.new("RGB", [10, 5], [10, 20, 30])
+var fitted = ImageOps.fit(wide, [4, 4])
+s.eq("fit size",  fitted.size, [4, 4])
+s.eq("fit fills",  fitted.getpixel([0, 0]), [10, 20, 30])
+
+s.done()

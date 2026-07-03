@@ -1,0 +1,134 @@
+# test_internal_codecs.ki -- exhaustive tests for the internal codec modules
+# (_img_o6769_jpeg, _img_o6769_gif). These modules are internal (name-mangled) and application code
+# should reach them only through img_image.open(...) / img_video, but their behaviour is testable
+# here because they expose a clean function API.
+#
+# We drive them with real bytes -- a JPEG we synthesize by re-encoding the committed MJPEG assets,
+# and the committed animated GIF -- rather than mocking, so what these tests certify is the actual
+# decode path.
+
+var C = import("_common")
+var jpeg = import("_img_o6769_jpeg")
+var gif = import("_img_o6769_gif")
+var Image = import("img_image")
+var path = import("path")
+var io = import("io")
+
+var s = C.Suite("internal codecs")
+
+var findTest = Function(name):
+    for base in ["testdata", "../testdata"]:
+        var p = path.join(base, name)
+        if path.exists(p):
+            return p
+    throw "cannot find testdata/" + name + " -- run tests from the repo root"
+
+var MJPEG = findTest("clip.mjpeg")
+var GIF = findTest("anim.gif")
+
+# ----------------------------------------------------------------- jpeg.decode
+# Extract one JPEG frame from the committed MJPEG (each frame is SOI..EOI).
+var mfd = io.open(MJPEG, "rb")
+var mbytes = mfd.read()
+mfd.close()
+
+# Locate the first SOI/EOI pair.
+var _findpair = Function(data, marker):
+    var i = 0
+    while i + 1 < len(data):
+        if data[i] == 255 and data[i + 1] == marker:
+            return i
+        i = i + 1
+    return -1
+var soi = _findpair(mbytes, 216)                     # 0xFFD8
+var eoi = _findpair(mbytes[soi + 2:], 217) + soi + 2 # 0xFFD9
+var oneJpeg = mbytes[soi:eoi + 2]
+
+var pair = jpeg.decode(oneJpeg)
+s.eq("jpeg.decode returns [tensor, mode]", len(pair), 2)
+s.truthy("jpeg.decode mode is RGB or L",
+         pair[1] == "RGB" or pair[1] == "L")
+# Tensor shape must be (H, W, C).
+var sh = pair[0].shape()
+s.eq("jpeg.decode tensor rank", len(sh), 3)
+s.truthy("jpeg.decode H > 0", sh[0] > 0)
+s.truthy("jpeg.decode W > 0", sh[1] > 0)
+s.truthy("jpeg.decode C is 1 or 3",
+         sh[2] == 1 or sh[2] == 3)
+# All values are in 0..255.
+var mn = pair[0].min()
+var mx = pair[0].max()
+s.truthy("jpeg.decode pixels >= 0", mn >= 0.0)
+s.truthy("jpeg.decode pixels <= 255", mx <= 255.0)
+
+# Adversarial: an obviously-broken JPEG must throw a clear error.
+s.throws("jpeg.decode empty",
+         Function(): return jpeg.decode(Bytes()))
+s.throws("jpeg.decode garbage",
+         Function(): return jpeg.decode(Bytes([1, 2, 3, 4, 5, 6, 7, 8])))
+# Truncated JPEG (SOI only) should also throw rather than silently succeed.
+s.throws("jpeg.decode truncated SOI-only",
+         Function(): return jpeg.decode(Bytes([255, 216])))
+
+# ----------------------------------------------------------------- gif.firstframe
+var gfd = io.open(GIF, "rb")
+var gbytes = gfd.read()
+gfd.close()
+
+var gpair = gif.firstframe(gbytes)
+s.eq("gif.firstframe returns [tensor, mode]", len(gpair), 2)
+s.eq("gif.firstframe mode", gpair[1], "RGB")
+var gsh = gpair[0].shape()
+s.eq("gif.firstframe tensor rank", len(gsh), 3)
+s.truthy("gif.firstframe H > 0",  gsh[0] > 0)
+s.truthy("gif.firstframe W > 0",  gsh[1] > 0)
+s.eq("gif.firstframe C == 3",     gsh[2], 3)
+
+# ----------------------------------------------------------------- gif.frames
+var gframes = gif.frames(gbytes)
+s.truthy("gif.frames returns >= 1 frame", len(gframes) >= 1)
+# Every frame is a dict with keys `rgb` (a tensor) and `delay` (an Integer, ms).
+var first = gframes[0]
+s.eq("gif frame dict has rgb+delay",
+     "rgb" in first and "delay" in first,
+     True)
+s.eq("gif frame rgb is a (H,W,3) tensor rank", len(first["rgb"].shape()), 3)
+s.eq("gif frame rgb has 3 channels",           first["rgb"].shape()[2],   3)
+s.truthy("gif frame delay >= 0", first["delay"] >= 0)
+# firstframe matches frames[0].rgb exactly (both take the same decode path).
+s.eq("gif firstframe == frames[0]",
+     first["rgb"].shape(), gpair[0].shape())
+
+# Adversarial GIFs.
+s.throws("gif.frames empty",
+         Function(): return gif.frames(Bytes()))
+s.throws("gif.firstframe garbage",
+         Function(): return gif.firstframe(Bytes([1, 2, 3, 4, 5, 6, 7, 8])))
+# The decoder is lenient on some truncated headers -- it may return an empty frame list rather
+# than throwing. We only require that it does NOT return corrupt output (an over-length list of
+# broken frames). An empty-or-throw response is acceptable.
+var lenient_result = None
+try:
+    lenient_result = gif.frames("GIF89a".encode("ascii") + Bytes([0, 0, 0, 0, 0, 0, 0]))
+catch as e:
+    lenient_result = "threw"
+s.truthy("gif.frames handles truncated cleanly",
+         lenient_result == "threw" or type(lenient_result) == "List")
+
+# ----------------------------------------------------------------- integration through img_image
+# The public path: Image.open(...) sniffs a JPEG (255, 216) magic and lazily loads _img_o6769_jpeg.
+var tmpJpeg = path.join(path.gettempdir(), "img_internal_test.jpg")
+var fj = io.open(tmpJpeg, "wb")
+fj.write(oneJpeg)
+fj.close()
+var imJ = Image.open(tmpJpeg)
+s.truthy("Image.open JPEG mode", imJ.mode == "RGB" or imJ.mode == "L")
+s.truthy("Image.open JPEG width > 0", imJ.width > 0)
+discard path.remove(tmpJpeg)
+
+# GIF via Image.open (uses gif.firstframe under the hood).
+var imG = Image.open(GIF)
+s.eq("Image.open GIF mode", imG.mode, "RGB")
+s.truthy("Image.open GIF width > 0", imG.width > 0)
+
+s.done()

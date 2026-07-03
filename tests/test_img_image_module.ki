@@ -1,0 +1,215 @@
+# test_img_image_module.ki -- module-level surface of img_image: constants, helpers, and factory
+# functions (new/fromtensor/merge/blend/open/frombytes). The Image class itself is exercised in
+# test_img_image_class.ki; codec-level round-trips in test_img_image_codecs.ki.
+
+var C = import("_common")
+var Image = import("img_image")
+var T = import("tensor")
+var path = import("path")
+var io = import("io")
+
+var s = C.Suite("img_image module")
+
+# ----------------------------------------------------------------- transpose / resample constants
+# The constants mirror Pillow's; they MUST keep their integer values so existing Pillow-style code
+# reading `Image.FLIP_LEFT_RIGHT` etc. still resolves the correct case in `transpose`.
+s.eq("FLIP_LEFT_RIGHT is 0", Image.FLIP_LEFT_RIGHT, 0)
+s.eq("FLIP_TOP_BOTTOM is 1", Image.FLIP_TOP_BOTTOM, 1)
+s.eq("ROTATE_90 is 2",       Image.ROTATE_90,       2)
+s.eq("ROTATE_180 is 3",      Image.ROTATE_180,      3)
+s.eq("ROTATE_270 is 4",      Image.ROTATE_270,      4)
+s.eq("TRANSPOSE is 5",       Image.TRANSPOSE,       5)
+s.eq("TRANSVERSE is 6",      Image.TRANSVERSE,      6)
+s.eq("NEAREST is 0",         Image.NEAREST,         0)
+s.eq("BILINEAR is 1",        Image.BILINEAR,        1)
+
+# ----------------------------------------------------------------- channels(mode)
+s.eq("channels L",    Image.channels("L"),    1)
+s.eq("channels RGB",  Image.channels("RGB"),  3)
+s.eq("channels RGBA", Image.channels("RGBA"), 4)
+s.throws("channels rejects unknown mode",
+         Function(): return Image.channels("YCbCr"),
+         "unsupported mode")
+s.throws("channels rejects empty mode",
+         Function(): return Image.channels(""),
+         "unsupported mode")
+
+# ----------------------------------------------------------------- clampbyte(t)
+# clampbyte both clips to [0,255] AND rounds to the nearest integer -- so intermediate arithmetic
+# never leaks fractional or out-of-range values into an encoder.
+var t = T.Tensor([[[-5.0, 300.0, 100.4], [255.9, 100.6, -0.4]]])
+var cb = Image.clampbyte(t).tolist()
+s.eq("clampbyte low clamped",   cb[0][0][0], 0.0)
+s.eq("clampbyte high clamped",  cb[0][0][1], 255.0)
+s.eq("clampbyte round-down",    cb[0][0][2], 100.0)
+s.eq("clampbyte round-up-hi",   cb[0][1][0], 255.0)
+s.eq("clampbyte round-up mid",  cb[0][1][1], 101.0)
+s.eq("clampbyte -0.4 -> 0",     cb[0][1][2], 0.0)
+
+# ----------------------------------------------------------------- byte packers
+# u32be: big-endian 32-bit. Roundtrips through u32be_at.
+s.eq("u32be 0",         Image.u32be(0),                 Bytes([0, 0, 0, 0]))
+s.eq("u32be 1",         Image.u32be(1),                 Bytes([0, 0, 0, 1]))
+s.eq("u32be 256",       Image.u32be(256),               Bytes([0, 0, 1, 0]))
+s.eq("u32be 0xDEADBEEF", Image.u32be(3735928559),       Bytes([222, 173, 190, 239]))
+var be = Image.u32be(4278222314)  # 0xFEEDBAAA
+s.eq("u32be_at roundtrip", Image.u32be_at(be, 0), 4278222314)
+# Read from within a longer buffer at an offset -- codec code does this constantly.
+var beoff = Bytes([9, 9]) + Image.u32be(12345) + Bytes([9])
+s.eq("u32be_at offset", Image.u32be_at(beoff, 2), 12345)
+
+# u16le / u32le are BMP-side (little-endian).
+s.eq("u16le 0",     Image.u16le(0),     Bytes([0, 0]))
+s.eq("u16le 258",   Image.u16le(258),   Bytes([2, 1]))
+s.eq("u16le 65535", Image.u16le(65535), Bytes([255, 255]))
+s.eq("u32le 0",             Image.u32le(0),          Bytes([0, 0, 0, 0]))
+s.eq("u32le 1",             Image.u32le(1),          Bytes([1, 0, 0, 0]))
+s.eq("u32le 0xDEADBEEF",    Image.u32le(3735928559), Bytes([239, 190, 173, 222]))
+s.eq("u32le_at roundtrip",  Image.u32le_at(Image.u32le(987654321), 0), 987654321)
+
+# ----------------------------------------------------------------- new(mode, size[, color])
+# Default fill (color=None) is opaque black.
+var blk = Image.new("RGB", [4, 3])
+s.eq("new default mode",   blk.mode,   "RGB")
+s.eq("new default width",  blk.width,  4)
+s.eq("new default height", blk.height, 3)
+s.eq("new default size",   blk.size,   [4, 3])
+s.eq("new default pixel",  blk.getpixel([0, 0]), [0, 0, 0])
+s.eq("new default other",  blk.getpixel([3, 2]), [0, 0, 0])
+
+# Solid-color fills, one per mode.
+s.eq("new L int fill",       Image.new("L",   [2, 2], 42).getpixel([1, 1]), 42)
+s.eq("new RGB list fill",    Image.new("RGB", [2, 2], [10, 20, 30]).getpixel([1, 0]), [10, 20, 30])
+s.eq("new RGBA list fill",   Image.new("RGBA",[2, 2], [10, 20, 30, 128]).getpixel([1, 1]), [10, 20, 30, 128])
+# An RGB image with a scalar int fill broadcasts to (v, v, v) via the "not a List" fallback.
+s.eq("new RGB scalar broadcast", Image.new("RGB", [2, 2], 77).getpixel([0, 1]), [77, 77, 77])
+
+# 1x1 -- the smallest legal image.
+var pixel = Image.new("L", [1, 1], 200)
+s.eq("new 1x1 width",  pixel.width,  1)
+s.eq("new 1x1 height", pixel.height, 1)
+s.eq("new 1x1 pixel",  pixel.getpixel([0, 0]), 200)
+
+# Adversarial: zero and negative dimensions must throw, not create weird zero-sized tensors.
+s.throws("new rejects w=0",
+         Function(): return Image.new("RGB", [0, 3]),
+         "must be positive")
+s.throws("new rejects h=0",
+         Function(): return Image.new("RGB", [3, 0]),
+         "must be positive")
+s.throws("new rejects negative w",
+         Function(): return Image.new("RGB", [-1, 5]),
+         "must be positive")
+s.throws("new rejects unknown mode",
+         Function(): return Image.new("CMYK", [4, 4]),
+         "unsupported mode")
+
+# ----------------------------------------------------------------- fromtensor(t, mode)
+var raw_rgb = T.Tensor([[[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]]])
+var im_ft = Image.fromtensor(raw_rgb, "RGB")
+s.eq("fromtensor width",  im_ft.width,  2)
+s.eq("fromtensor height", im_ft.height, 1)
+s.eq("fromtensor pixel",  im_ft.getpixel([1, 0]), [40, 50, 60])
+
+# The tensor is copied (+ 0.0) so the Image owns its own storage.
+s.eq("fromtensor detaches",
+     Image.fromtensor(raw_rgb, "RGB").tensor().shape(),
+     [1, 2, 3])
+
+# Rank-check: fromtensor needs a (H, W, C) tensor. A 2-D or 1-D tensor is rejected.
+s.throws("fromtensor rejects 2-D tensor",
+         Function(): return Image.fromtensor(T.Tensor([[1.0, 2.0]]), "L"),
+         "(H,W,C)")
+s.throws("fromtensor rejects wrong channel count",
+         Function(): return Image.fromtensor(raw_rgb, "L"),
+         "channels")
+s.throws("fromtensor rejects unknown mode",
+         Function(): return Image.fromtensor(raw_rgb, "XYZ"),
+         "unsupported mode")
+
+# ----------------------------------------------------------------- merge(mode, bands)
+var rBand = Image.new("L", [2, 2], 10)
+var gBand = Image.new("L", [2, 2], 20)
+var bBand = Image.new("L", [2, 2], 30)
+var aBand = Image.new("L", [2, 2], 200)
+var rgb = Image.merge("RGB", [rBand, gBand, bBand])
+s.eq("merge RGB mode",  rgb.mode, "RGB")
+s.eq("merge RGB size",  rgb.size, [2, 2])
+s.eq("merge RGB pixel", rgb.getpixel([0, 0]), [10, 20, 30])
+s.eq("merge RGBA pixel",
+     Image.merge("RGBA", [rBand, gBand, bBand, aBand]).getpixel([1, 1]),
+     [10, 20, 30, 200])
+# A one-band merge into "L" is legal (Pillow's behaviour).
+s.eq("merge L one band", Image.merge("L", [rBand]).getpixel([0, 0]), 10)
+s.throws("merge rejects wrong band count for RGB",
+         Function(): return Image.merge("RGB", [rBand, gBand]),
+         "3 bands")
+s.throws("merge rejects wrong band count for RGBA",
+         Function(): return Image.merge("RGBA", [rBand, gBand, bBand]),
+         "4 bands")
+s.throws("merge rejects unknown mode",
+         Function(): return Image.merge("YUV", [rBand]),
+         "unsupported mode")
+
+# ----------------------------------------------------------------- blend(a, b, alpha)
+var aImg = Image.new("RGB", [2, 2], [0, 0, 0])
+var bImg = Image.new("RGB", [2, 2], [200, 100, 50])
+s.eq("blend alpha=0  keeps a", Image.blend(aImg, bImg, 0.0).getpixel([0, 0]), [0, 0, 0])
+s.eq("blend alpha=1  keeps b", Image.blend(aImg, bImg, 1.0).getpixel([1, 1]), [200, 100, 50])
+s.eq("blend alpha=.5 midpoint",
+     Image.blend(aImg, bImg, 0.5).getpixel([0, 1]),
+     [100, 50, 25])
+# Values outside 0..1 are clamped to the pixel range but do NOT throw (Pillow allows overshoot).
+s.eq("blend clamps overshoot high",
+     Image.blend(aImg, bImg, 2.0).getpixel([0, 0]),
+     [255, 200, 100])
+s.eq("blend clamps overshoot low",
+     Image.blend(aImg, bImg, -1.0).getpixel([0, 0]),
+     [0, 0, 0])
+# Mismatched shapes are rejected up front.
+var big = Image.new("RGB", [3, 3])
+s.throws("blend rejects mismatched size",
+         Function(): return Image.blend(aImg, big, 0.5),
+         "matching")
+var mono = Image.new("L", [2, 2])
+s.throws("blend rejects mismatched mode",
+         Function(): return Image.blend(aImg, Image.new("RGBA", [2, 2]), 0.5),
+         "matching")
+
+# ----------------------------------------------------------------- open(path) / frombytes(data)
+# open() is the file wrapper around frombytes(); the byte-level codec paths are tested exhaustively
+# in test_img_image_codecs.ki. Here we just verify the file wrapper and the format sniffer.
+var tmp = path.join(path.gettempdir(), "img_module_test.png")
+Image.new("RGB", [4, 4], [10, 20, 30]).save(tmp)
+var reopened = Image.open(tmp)
+s.eq("open mode",   reopened.mode,   "RGB")
+s.eq("open size",   reopened.size,   [4, 4])
+s.eq("open pixel",  reopened.getpixel([2, 2]), [10, 20, 30])
+discard path.remove(tmp)
+
+# frombytes: sniff every supported format from its magic bytes.
+var png_bytes = Image.new("L",    [3, 2], 55).tobytes("png")
+var ppm_bytes = Image.new("RGB",  [3, 2], [1, 2, 3]).tobytes("ppm")
+var pgm_bytes = Image.new("L",    [3, 2], 200).tobytes("pgm")
+var bmp_bytes = Image.new("RGB",  [3, 2], [9, 8, 7]).tobytes("bmp")
+s.eq("sniff PNG",  Image.frombytes(png_bytes).mode, "L")
+s.eq("sniff PPM",  Image.frombytes(ppm_bytes).mode, "RGB")
+s.eq("sniff PGM",  Image.frombytes(pgm_bytes).mode, "L")
+s.eq("sniff BMP",  Image.frombytes(bmp_bytes).mode, "RGB")
+
+# Adversarial: garbage / truncated / unknown-format bytes should throw a recognisable error.
+s.throws("frombytes rejects empty",
+         Function(): return Image.frombytes(Bytes()),
+         "unrecognized")
+s.throws("frombytes rejects garbage",
+         Function(): return Image.frombytes(Bytes([0, 1, 2, 3, 4, 5, 6, 7])),
+         "unrecognized")
+# 4-byte PNG signature prefix without the second half: not enough to sniff, must reject cleanly.
+s.throws("frombytes rejects half-signature",
+         Function(): return Image.frombytes(Bytes([137, 80, 78, 71])),
+         "unrecognized")
+# open() on a missing path should raise via io.
+s.throws("open missing file",
+         Function(): return Image.open(path.join(path.gettempdir(), "no_such_file_xyzzy.png")))
+
+s.done()
