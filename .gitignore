@@ -1,0 +1,18 @@
+# Temporary files
+*.tmp
+*.log
+*.bak
+*.swp
+
+# Python bytecode cache (compare_pillow.py / compare_video_pillow.py)
+__pycache__/
+*.pyc
+
+# Editor / OS junk
+.DS_Store
+.idea/
+.vscode/
+
+# Comparison / demo output
+compare_out/
+demo_out/
