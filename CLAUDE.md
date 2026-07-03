@@ -65,19 +65,36 @@ sub-namespaces). We layer manually with a prefix:
 
 - **`img_*`** — the public surface. Each module is imported directly:
   - `img_image` — the `Image` class + `open`/`save`/`new`/`fromtensor`/`merge`/`blend` +
-    PNG/PPM/PGM/BMP codecs.
+    PNG/PPM/PGM/BMP codecs (and JPEG save when ffmpeg is available).
   - `img_ops` — Pillow-style `ImageOps` (invert, grayscale, autocontrast, equalize, ...).
   - `img_filter` — convolution + rank filters (`BLUR`, `SHARPEN`, `GaussianBlur(r)`, ...).
   - `img_draw` — 2-D drawing primitives (line/rectangle/ellipse/polygon).
-  - `img_video` — an OpenCV-style `VideoCapture` (MJPEG/GIF/Y4M/image-sequence/HTTP-MJPEG).
-- **`_img_o6769_*`** — internal codec modules, name-mangled with a random suffix so they do not
-  clash with anything a user or another package might install. Never `import` these from
-  application code — reach them through `img_image.open(...)` and `img_video`.
-  - `_img_o6769_jpeg` — baseline JPEG decoder.
-  - `_img_o6769_gif` — GIF87a/89a decoder.
+  - `img_video` — an OpenCV-style `VideoCapture` (MJPEG/GIF/Y4M/image-sequence/HTTP-MJPEG in pure
+    Kirito; MP4 / H.264 / HEVC / AV1 / RTSP / RTMP via ffmpeg transcode).
+- **`_img_o6769_*`** — internal modules, name-mangled with a random suffix so they do not clash
+  with anything a user or another package might install. Never `import` these from application
+  code — reach them through `img_image.open(...)` / `img_image.save(...)` / `img_video`.
+  - `_img_o6769_jpeg` — baseline JPEG decoder (pure Kirito).
+  - `_img_o6769_gif` — GIF87a/89a decoder (pure Kirito).
+  - `_img_o6769_ffmpeg` — subprocess wrapper for the external `ffmpeg` binary. All JPEG encode
+    and compressed-video / RTSP paths go through here. If ffmpeg is not on `PATH` (or
+    `$IMG_FFMPEG`), the ffmpeg-backed paths throw a clear installation message; every pure-Kirito
+    path keeps working with no external dependency.
 
 **Rule:** anything that is not a supported public entry point goes under `_img_o6769_`. A user's
 program should only ever type module names starting with `img_`.
+
+### Optional runtime dependency: `ffmpeg`
+
+`ffmpeg` is **optional** but required to enable two feature groups:
+
+- **JPEG encoding** — `Image.save("*.jpg")` and `.tobytes("jpeg", quality=…)`.
+- **Compressed video** — MP4 / MKV / MOV / AVI / WebM / FLV / TS / H.264 / HEVC / AV1 sources, plus
+  RTSP / RTMP live streams, opened through `img_video.VideoCapture(...)`.
+
+The subprocess is spawned via `sys.createprocess`. Because `sys.createprocess` decodes stdout as
+UTF-8 (mangling binary), everything routes through temp files (`io.open(...,"rb"/"wb")`) rather
+than pipes — see `_img_o6769_ffmpeg.ki`.
 
 ### Style
 

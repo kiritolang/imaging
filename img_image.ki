@@ -357,8 +357,9 @@ class Image:
     var filter = Function(self, flt):
         return Image(flt.apply(self._data), self.mode)
 
-    # Save to `path`. Format is taken from `format` if given, else the file extension.
-    var save = Function(self, path, format = None):
+    # Save to `path`. Format is taken from `format` if given, else the file extension. `quality`
+    # (0..100, default 90) is used by lossy encoders (JPEG); ignored by lossless ones (PNG/PPM/BMP).
+    var save = Function(self, path, format = None, quality = 90):
         var fmt = format
         if fmt == None:
             var dot = path.rfind(".")
@@ -374,6 +375,8 @@ class Image:
                 blob = _pnm_encode(self._data, self.mode)
             case "bmp":
                 blob = _bmp_encode(self._data, self.mode)
+            case "jpg", "jpeg":
+                blob = _jpeg_encode(self._data, self.mode, quality)
             default:
                 throw "unsupported save format: " + fmt
         var f = io.open(path, "wb")
@@ -381,8 +384,9 @@ class Image:
         f.close()
         return None
 
-    # Serialize to an in-memory `Bytes` blob in the named format ("png"/"ppm"/"bmp").
-    var tobytes = Function(self, format):
+    # Serialize to an in-memory `Bytes` blob in the named format. `quality` (0..100) applies to
+    # JPEG only.
+    var tobytes = Function(self, format, quality = 90):
         var fmt = format.lower()
         if fmt == "png":
             return _png_encode(self._data, self.mode)
@@ -390,6 +394,8 @@ class Image:
             return _pnm_encode(self._data, self.mode)
         if fmt == "bmp":
             return _bmp_encode(self._data, self.mode)
+        if fmt == "jpg" or fmt == "jpeg":
+            return _jpeg_encode(self._data, self.mode, quality)
         throw "unsupported format: " + fmt
 
 # ---------------------------------------------------------------- module factories
@@ -805,3 +811,41 @@ var _bmp_decode = Function(data):
         p = p + pad
         y = y + 1
     return [_tensor_from_flat(flat, H, W, 3), "RGB"]
+
+# ================================================================ JPEG encoder (via ffmpeg subprocess)
+# JPEG encoding is delegated to a locally-installed `ffmpeg` binary. Pure Kirito already handles
+# the DECODE path (see _img_o6769_jpeg.ki); the ENCODER (Huffman construction + baseline sequential
+# quantization) is heavier and duplicates what every ffmpeg install already ships. Using ffmpeg
+# here also matches how img_video handles compressed-video sources (MP4/H.264/RTSP).
+#
+# We stage the source as a PPM/PGM tempfile (lossless Netpbm: byte-exact colour, ffmpeg reads it
+# natively) and take the produced .jpg back as Bytes. sys.createprocess's stdout is UTF-8-decoded
+# and mangles binary, so we never pipe -- every byte round-trips via disk.
+var _jpeg_encode = Function(d, mode, quality):
+    var q = quality
+    if q < 1:
+        q = 1
+    if q > 100:
+        q = 100
+    # ffmpeg's `-q:v` for the mjpeg encoder runs 1..31, INVERTED (1=best, 31=worst). Map our
+    # 0..100 (Pillow-style, 100=best) into that.
+    var qff = 31 - Integer(round(Float(q - 1) * 30.0 / 99.0))
+    if qff < 1:
+        qff = 1
+    if qff > 31:
+        qff = 31
+    var src = d
+    var in_ext = ".ppm"
+    var mode_in = mode
+    if mode == "L":
+        in_ext = ".pgm"
+    if mode == "RGBA":
+        src = d.slice(0, 3, 1, 2)                  # baseline JPEG has no alpha
+        mode_in = "RGB"
+    var ppm_bytes = _pnm_encode(src, mode_in)
+    var extra = ["-c:v", "mjpeg", "-q:v", String(qff)]
+    if mode == "L":
+        extra.append("-pix_fmt")
+        extra.append("gray")
+    var ff = import("_img_o6769_ffmpeg")
+    return ff.transcode_bytes(ppm_bytes, in_ext, ".jpg", extra_args = extra, timeout = 60)

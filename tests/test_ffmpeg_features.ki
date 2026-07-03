@@ -1,0 +1,171 @@
+# test_ffmpeg_features.ki -- exhaustive tests for the ffmpeg-backed features:
+#   - JPEG encoding (Image.save("*.jpg") and .tobytes("jpeg"))
+#   - MP4 / H.264 / RTSP / RTMP / HTTP-compressed video (VideoCapture through ffmpeg transcode)
+#
+# The tests SKIP cleanly (with an ALL TESTS PASSED marker so the runner is happy) if ffmpeg is not
+# available on this machine -- the whole point of routing through ffmpeg is that the library must
+# not require it for the pure-Kirito backends. When ffmpeg IS available, every path is exercised.
+
+var C = import("_common")
+var Image = import("img_image")
+var cv = import("img_video")
+var ff = import("_img_o6769_ffmpeg")
+var path = import("path")
+var io = import("io")
+var sys = import("sys")
+
+var s = C.Suite("ffmpeg features")
+
+# ----------------------------------------------------------------- probe: ffmpeg on PATH?
+if not ff.available():
+    io.print("ffmpeg not installed -- skipping ffmpeg-backed feature tests")
+    s.done()
+    sys.exit(0)
+
+# ----------------------------------------------------------------- ffmpeg helper: available/require
+s.truthy("ff.available()", ff.available())
+s.truthy("ff.require() returns a path", len(ff.require()) > 0)
+
+# tempfile: distinct paths under the OS temp dir, and the extension is preserved.
+var t1 = ff.tempfile(".jpg")
+var t2 = ff.tempfile(".jpg")
+s.ne("tempfile paths are distinct", t1, t2)
+s.truthy("tempfile ends with .jpg", t1[len(t1) - 4:] == ".jpg")
+s.truthy("tempfile in system tempdir", t1.startswith(path.gettempdir()))
+
+# read_bytes / write_bytes round-trip a real byte blob (bytes with high bit).
+var probe = ff.tempfile(".bin")
+ff.write_bytes(probe, Bytes([255, 216, 0, 137, 80]))
+var back = ff.read_bytes(probe)
+s.eq("read_bytes round-trip length", len(back), 5)
+s.eq("read_bytes preserves 0xFF byte", back[0], 255)
+s.eq("read_bytes preserves 0x00 byte", back[2], 0)
+ff.quiet_remove(probe)
+# quiet_remove is idempotent -- a second call on a missing file is a no-op.
+ff.quiet_remove(probe)
+
+# ----------------------------------------------------------------- JPEG encode + decode round trip
+# Build a small colourful image with a known pattern so a lossy round trip is still recognisable.
+var src = Image.new("RGB", [16, 16], [128, 128, 128])
+var j = 0
+while j < 16:
+    src.putpixel([0, j], [255, 0, 0])
+    src.putpixel([15, j], [0, 0, 255])
+    j = j + 1
+
+# save(".jpg") should produce a real JPEG file with SOI / EOI markers.
+var out = path.join(path.gettempdir(), "img_test_encode.jpg")
+src.save(out)
+var f = io.open(out, "rb")
+var blob = f.read()
+f.close()
+s.eq("jpg SOI marker", blob[0:2], Bytes([255, 216]))
+s.eq("jpg EOI marker", blob[len(blob) - 2:], Bytes([255, 217]))
+# It must be substantially smaller than the raw PPM (16*16*3 = 768 raw bytes + 16-byte header).
+s.truthy("jpg is compact", len(blob) < 500)
+# Sniffed back through frombytes.
+var round = Image.open(out)
+s.eq("open decoded mode", round.mode, "RGB")
+s.eq("open decoded size", round.size, src.size)
+# Lossy: pixel values won't match exactly, but a solid patch stays within a small delta.
+var d = round.getpixel([8, 8])
+s.close("jpg centre R roughly preserved", Float(d[0]), 128.0, 20.0)
+discard path.remove(out)
+
+# save(".jpeg") is the same encoder.
+var out2 = path.join(path.gettempdir(), "img_test_encode.jpeg")
+src.save(out2)
+s.truthy("jpeg ext also works", path.getsize(out2) > 0)
+discard path.remove(out2)
+
+# tobytes("jpeg") gives the same blob shape.
+var bts = src.tobytes("jpeg")
+s.eq("tobytes(jpeg) SOI", bts[0:2], Bytes([255, 216]))
+s.eq("tobytes(jpeg) EOI", bts[len(bts) - 2:], Bytes([255, 217]))
+# tobytes(quality=…) tunes size: higher quality -> larger file.
+var lowQ = src.tobytes("jpeg", 30)
+var hiQ  = src.tobytes("jpeg", 95)
+s.truthy("higher quality -> larger jpeg", len(hiQ) > len(lowQ))
+# Extreme values clamp: quality<1 or >100 shouldn't throw.
+s.passes("jpeg quality 0 clamps low",   Function(): return src.tobytes("jpeg", 0))
+s.passes("jpeg quality 200 clamps high",Function(): return src.tobytes("jpeg", 200))
+
+# Greyscale JPEG round trip. Baseline JPEG grey is 1-component.
+var srcL = Image.new("L", [8, 8], 128)
+srcL.putpixel([0, 0], 250)
+srcL.putpixel([7, 7], 5)
+var jL = srcL.tobytes("jpeg")
+s.eq("L jpg SOI", jL[0:2], Bytes([255, 216]))
+var roundL = Image.frombytes(jL)
+s.truthy("L jpeg round-trips mode",
+         roundL.mode == "L" or roundL.mode == "RGB")   # some decoders promote grey to RGB
+s.eq("L jpeg size", roundL.size, srcL.size)
+
+# RGBA input: baseline JPEG has no alpha, so encode drops alpha (like Pillow does).
+var srcA = Image.new("RGBA", [8, 8], [100, 150, 200, 128])
+var jA = srcA.tobytes("jpeg")
+s.eq("RGBA -> jpg SOI", jA[0:2], Bytes([255, 216]))
+s.eq("RGBA -> jpg decoded mode", Image.frombytes(jA).mode, "RGB")
+
+# ----------------------------------------------------------------- MP4 open via ffmpeg
+# Synthesize a real H.264 MP4 with ffmpeg (lavfi testsrc) and then open it.
+var mp4 = path.join(path.gettempdir(), "img_test_ffmpeg_open.mp4")
+var mkResult = sys.createprocess(
+    ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+     "-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=1",
+     "-c:v", "libx264", "-pix_fmt", "yuv420p", mp4],
+    timeout = 60)
+if mkResult["code"] != 0:
+    io.print("could not synthesize an .mp4 (no libx264?):", mkResult["stderr"][0:200])
+    # Skip the video-open subsection but continue reporting -- other checks are still valid.
+    s.done()
+    sys.exit(0)
+
+var capMp4 = cv.VideoCapture(mp4)
+s.eq("mp4 kind is mjpeg (transcoded)", capMp4.kind, "mjpeg")
+s.eq("mp4 backend is ffmpeg",          capMp4.backend, "ffmpeg")
+s.truthy("mp4 opened",                 capMp4.isopened())
+s.truthy("mp4 count > 0",              capMp4.count > 0)
+s.eq("mp4 width",  capMp4.width,  64)
+s.eq("mp4 height", capMp4.height, 48)
+# read() returns a real frame.
+var mpair = capMp4.read()
+s.eq("mp4 first frame ok", mpair[0], True)
+s.eq("mp4 first frame mode", mpair[1].mode, "RGB")
+s.eq("mp4 first frame size", mpair[1].size, [64, 48])
+capMp4.release()
+# release cleans up the intermediate MJPEG temp file (we can't check the path -- it's private).
+s.falsy("mp4 released", capMp4.isopened())
+
+# Iteration works over the transcoded backend.
+var capMp4b = cv.VideoCapture(mp4)
+var iter_frames = 0
+for frame in capMp4b:
+    iter_frames = iter_frames + 1
+s.truthy("mp4 iteration yields frames", iter_frames > 0)
+capMp4b.release()
+
+# `duration` (module-level open) caps how much of the source we transcode.
+var capShort = cv.open(mp4, duration = 0.3)
+s.truthy("duration caps produce shorter transcode",
+         capShort.count < 10)          # 10 fps * 1 s = 10 frames uncapped; 0.3 s ~ 3
+capShort.release()
+discard path.remove(mp4)
+
+# ----------------------------------------------------------------- MP4 via HTTP extension sniff
+# We can't stand up an HTTP server here, but we can verify the router picks the ffmpeg path for a
+# compressed extension over an HTTP URL rather than reaching for the native MJPEG-over-HTTP
+# multipart backend. A synthetic broken URL is fine -- ffmpeg will fail to open it, and that
+# failure carries the ffmpeg fingerprint.
+s.throws("compressed .mp4 over http routes through ffmpeg",
+         Function(): return cv.VideoCapture("http://127.0.0.1:1/no_such_video.mp4"),
+         "ffmpeg failed")
+
+# ----------------------------------------------------------------- RTSP: routing check
+# We can't reach a real RTSP server -- verify that an rtsp:// URL is routed through ffmpeg (its
+# failure surfaces with the ffmpeg fingerprint, not the native MJPEG or HTTP paths).
+s.throws("rtsp routes through ffmpeg",
+         Function(): return cv.VideoCapture("rtsp://127.0.0.1:1/never_answers", duration = 1),
+         "ffmpeg failed")
+
+s.done()

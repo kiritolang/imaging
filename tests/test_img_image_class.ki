@@ -310,7 +310,7 @@ s.truthy("tobytes bmp",  len(Image.new("RGB", [2, 2]).tobytes("bmp")) > 0)
 # Case-insensitive.
 s.truthy("tobytes PNG upper", len(Image.new("RGB", [1, 1]).tobytes("PNG")) > 0)
 s.throws("tobytes rejects unknown",
-         Function(): return Image.new("L", [1, 1]).tobytes("jpeg"),
+         Function(): return Image.new("L", [1, 1]).tobytes("foobar"),
          "unsupported format")
 s.throws("tobytes rejects empty",
          Function(): return Image.new("L", [1, 1]).tobytes(""),

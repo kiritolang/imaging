@@ -1,0 +1,154 @@
+# _img_o6769_ffmpeg.ki -- internal helper that wraps an external `ffmpeg` binary via sys.createprocess.
+# INTERNAL module of the imaging package (public callers reach it via `img_image.save("x.jpg")` /
+# `img_video.VideoCapture("in.mp4")`); the `_img_o6769_` prefix keeps it out of the way in the flat
+# global module list.
+#
+# Everything JPEG-write, MP4/H.264/HEVC/RTSP-read routes through here. If `ffmpeg` is not on PATH
+# (or `$IMG_FFMPEG` does not point at it), the caller gets a single clear error asking them to
+# install ffmpeg -- no half-working fallbacks.
+#
+# IMPORTANT byte-safety note: sys.createprocess exposes stdout/stdin as Strings (UTF-8-decoded),
+# so piping arbitrary binary through it MANGLES bytes with the high bit set. Every ffmpeg call
+# below therefore uses TEMP FILES for both input and output, and reads/writes them via
+# io.open(path, "rb"/"wb") -- which is byte-exact. Callers hand us Bytes in, get Bytes out.
+
+var sys = import("sys")
+var io = import("io")
+var path = import("path")
+
+var _CACHED_BIN = None
+var _COUNTER = 0
+
+var _MISSING_MSG = "ffmpeg not found on PATH (set $IMG_FFMPEG to override). This feature (JPEG encoding, or MP4/H.264/HEVC/RTSP video) needs a working ffmpeg install: apt install ffmpeg, brew install ffmpeg, or download from ffmpeg.org."
+
+# Locate the ffmpeg binary. Honours $IMG_FFMPEG first (an explicit override), then $PATH via `which`.
+# Returns the binary path, or "" if not found. Callers should treat "" as "unavailable".
+var _locate = Function():
+    var override = sys.getenv("IMG_FFMPEG", "")
+    if override != None and override != "":
+        return override
+    try:
+        var r = sys.createprocess(["which", "ffmpeg"], timeout = 5)
+        if r["code"] == 0:
+            var out = r["stdout"].strip()
+            if len(out) > 0:
+                return out
+    catch as e:
+        pass
+    try:
+        var r2 = sys.createprocess(["ffmpeg", "-version"], timeout = 5)
+        if r2["code"] == 0:
+            return "ffmpeg"
+    catch as e:
+        pass
+    return ""
+
+# True iff we can find an ffmpeg binary. Callers should test this before pointing users at
+# ffmpeg-only paths (JPEG save, MP4 open, RTSP open).
+var available = Function():
+    if _CACHED_BIN == None:
+        _CACHED_BIN = _locate()
+    return _CACHED_BIN != ""
+
+# Return the resolved binary path, or throw a clear installation message. Cached across calls.
+var require = Function():
+    if _CACHED_BIN == None:
+        _CACHED_BIN = _locate()
+    if _CACHED_BIN == "":
+        throw _MISSING_MSG
+    return _CACHED_BIN
+
+# Reset the cache -- test hook for a suite that mutates $IMG_FFMPEG.
+var _reset_cache = Function():
+    _CACHED_BIN = None
+    return None
+
+# A unique temp path with the given extension (leading dot, e.g. ".mjpeg"). Inside the OS temp dir
+# so it survives crashes without polluting cwd, and stamped with a monotonic counter so parallel
+# calls in one process get distinct names.
+var tempfile = Function(ext):
+    _COUNTER = _COUNTER + 1
+    return path.join(path.gettempdir(), "img_o6769_" + String(_COUNTER) + ext)
+
+# Read a whole file as Bytes (io.open in "rb" mode). Used to get the ffmpeg output back after a
+# transcode.
+var read_bytes = Function(p):
+    var f = io.open(p, "rb")
+    var b = f.read()
+    f.close()
+    return b
+
+# Write Bytes to a file (io.open in "wb"). Used to stage the ffmpeg input.
+var write_bytes = Function(p, data):
+    var f = io.open(p, "wb")
+    f.write(data)
+    f.close()
+    return None
+
+# Silent unlink (no throw if the file is already gone). Used for temp cleanup on both success and
+# failure paths.
+var quiet_remove = Function(p):
+    try:
+        discard path.remove(p, missing_ok = True)
+    catch as e:
+        pass
+    return None
+
+# Run ffmpeg with the given args. Prepends the resolved binary path. Throws with the tail of stderr
+# on any non-zero exit -- ffmpeg reports missing codecs, unreadable inputs, unknown pixel formats,
+# and so on there, not on stdout.
+var run = Function(args, timeout = 300):
+    var bin = require()
+    var full = [bin]
+    for a in args:
+        full.append(a)
+    var r = sys.createprocess(full, timeout = timeout)
+    if r["code"] != 0:
+        var err_tail = r["stderr"]
+        if len(err_tail) > 400:
+            err_tail = "..." + err_tail[len(err_tail) - 400:]
+        throw "ffmpeg failed (exit " + String(r["code"]) + "): " + err_tail
+    return None
+
+# Encode: write `stdin_bytes` to a temp file with `.in_ext`, run ffmpeg producing a temp file with
+# `.out_ext`, read the output back as Bytes. `extra_args` are inserted between `-i INFILE` and
+# `OUTFILE`. Temp files are ALWAYS cleaned up (finally-like via try/catch + rethrow).
+var transcode_bytes = Function(stdin_bytes, in_ext, out_ext, extra_args = None, timeout = 60):
+    var inp = tempfile(in_ext)
+    var outp = tempfile(out_ext)
+    write_bytes(inp, stdin_bytes)
+    var args = ["-hide_banner", "-loglevel", "error", "-y", "-i", inp]
+    if extra_args != None:
+        for a in extra_args:
+            args.append(a)
+    args.append(outp)
+    var err = None
+    try:
+        run(args, timeout)
+    catch as e:
+        err = String(e)
+    var result = None
+    if err == None:
+        result = read_bytes(outp)
+    quiet_remove(inp)
+    quiet_remove(outp)
+    if err != None:
+        throw err
+    return result
+
+# Transcode a filesystem SOURCE (path or URL) to a temp file at OUTP with the given ffmpeg args
+# inserted before `-i SOURCE`. Returns OUTP. Caller is responsible for cleanup (this variant is
+# used by img_video, which owns the temp file for the lifetime of the VideoCapture).
+var transcode_to = Function(source, outp, pre_args = None, post_args = None, timeout = 300):
+    var args = ["-hide_banner", "-loglevel", "error", "-y"]
+    if pre_args != None:
+        for a in pre_args:
+            args.append(a)
+    args.append("-i")
+    args.append(source)
+    if post_args != None:
+        for a in post_args:
+            args.append(a)
+    args.append(outp)
+    run(args, timeout)
+    return outp
