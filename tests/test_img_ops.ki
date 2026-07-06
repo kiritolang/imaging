@@ -1,11 +1,11 @@
-# test_img_ops.ki -- exhaustive tests for every function in img_ops (Pillow's ImageOps).
+# test_img/ops.ki -- exhaustive tests for every function in img/ops (Pillow's ImageOps).
 
 var C = import("_common")
-var Image = import("img_image")
-var ImageOps = import("img_ops")
+var Image = import("img/image")
+var ImageOps = import("img/ops")
 var T = import("tensor")
 
-var s = C.Suite("img_ops")
+var s = C.Suite("img/ops")
 
 # ----------------------------------------------------------------- invert
 # Colour channels are mirrored around 128; alpha is preserved untouched.

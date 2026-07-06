@@ -1,15 +1,15 @@
-# test_img_video.ki -- exhaustive tests for the VideoCapture class in img_video, across every
+# test_img/video.ki -- exhaustive tests for the VideoCapture class in img/video, across every
 # backend it supports (MJPEG file, animated GIF, Y4M, image sequence, and the pure `open()` wrapper).
 # The network MJPEG backend is exercised in compare_video_pillow.py; wiring a real HTTP server here
 # would only test the OS and the socket module, not this library.
 
 var C = import("_common")
-var cv = import("img_video")
-var Image = import("img_image")
+var cv = import("img/video")
+var Image = import("img/image")
 var path = import("path")
 var io = import("io")
 
-var s = C.Suite("img_video")
+var s = C.Suite("img/video")
 
 # The two committed test assets live in ../testdata/ relative to this file's parent dir.
 var HERE = path.dirname(path.gettempdir())      # unused; we always look up from cwd

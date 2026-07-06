@@ -1,11 +1,11 @@
-# test_img_image_class.ki -- exhaustive tests for the Image class in img_image. Every attribute,
+# test_img_image_class.ki -- exhaustive tests for the Image class in img/image. Every attribute,
 # every method, on every mode, with the happy path, degenerate shapes, and adversarial input.
 
 var C = import("_common")
-var Image = import("img_image")
+var Image = import("img/image")
 var T = import("tensor")
 
-var s = C.Suite("img_image class")
+var s = C.Suite("img/image class")
 
 # ----------------------------------------------------------------- attributes after _init_
 var im = Image.new("RGB", [5, 3], [10, 20, 30])
@@ -288,7 +288,7 @@ s.eq("hist RGB G bin",  histRGB[256 + 20],     4)
 s.eq("hist RGB B bin",  histRGB[512 + 30],     4)
 
 # ----------------------------------------------------------------- filter()
-# filter() delegates to a filter-like object (see test_img_filter.ki). A dummy filter here that
+# filter() delegates to a filter-like object (see test_img/filter.ki). A dummy filter here that
 # doubles every value verifies only the plumbing.
 class Doubler:
     var apply = Function(self, d):

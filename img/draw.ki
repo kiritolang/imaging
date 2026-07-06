@@ -1,4 +1,4 @@
-# img_draw.ki -- 2-D drawing primitives for `img_image`, in the spirit of Pillow's ImageDraw.
+# img/draw.ki -- 2-D drawing primitives for `img/image`, in the spirit of Pillow's ImageDraw.
 #
 #     var draw = ImageDraw.Draw(img)
 #     draw.line([0, 0, 63, 63], [255, 0, 0])
@@ -230,5 +230,5 @@ class Draw:
             self.line(closed, outline, 1)
         return None
 
-# `import("img_draw").Draw(img)` instantiates the class directly (calling a class invokes its
+# `import("img/draw").Draw(img)` instantiates the class directly (calling a class invokes its
 # constructor), matching Pillow's ImageDraw.Draw(img) factory call.

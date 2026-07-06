@@ -1,10 +1,10 @@
-# test_img_draw.ki -- exhaustive tests for every public method of the Draw class in img_draw.
+# test_img/draw.ki -- exhaustive tests for every public method of the Draw class in img/draw.
 
 var C = import("_common")
-var Image = import("img_image")
-var ImageDraw = import("img_draw")
+var Image = import("img/image")
+var ImageDraw = import("img/draw")
 
-var s = C.Suite("img_draw")
+var s = C.Suite("img/draw")
 
 var freshRGB = Function():
     return Image.new("RGB", [10, 10], [0, 0, 0])

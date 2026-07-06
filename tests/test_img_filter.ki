@@ -1,14 +1,14 @@
-# test_img_filter.ki -- exhaustive tests for every filter class and constant in img_filter.
+# test_img/filter.ki -- exhaustive tests for every filter class and constant in img/filter.
 #
 # Each filter exposes `apply(tensor) -> tensor` and is passed through img.filter(...). We build
 # minimum-sized images with a single "spike" pixel so the effect of a kernel is easy to reason
 # about: e.g. FIND_EDGES turns a spike into a bright cluster; BLUR spreads it; SHARPEN amplifies it.
 
 var C = import("_common")
-var Image = import("img_image")
-var ImageFilter = import("img_filter")
+var Image = import("img/image")
+var ImageFilter = import("img/filter")
 
-var s = C.Suite("img_filter")
+var s = C.Suite("img/filter")
 
 # A 5x5 "L" canvas with a bright spike at the centre and zero elsewhere.
 var makeSpike = Function(size, mid, edge):

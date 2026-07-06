@@ -1,16 +1,16 @@
 # test_internal_codecs.ki -- exhaustive tests for the internal codec modules
-# (_img_o6769_jpeg, _img_o6769_gif). These modules are internal (name-mangled) and application code
-# should reach them only through img_image.open(...) / img_video, but their behaviour is testable
-# here because they expose a clean function API.
+# (img/_jpeg, img/_gif). These modules are internal (leading-underscore convention within the
+# `img/` directory) and application code should reach them only through img/image.open(...) /
+# img/video, but their behaviour is testable here because they expose a clean function API.
 #
 # We drive them with real bytes -- a JPEG we synthesize by re-encoding the committed MJPEG assets,
 # and the committed animated GIF -- rather than mocking, so what these tests certify is the actual
 # decode path.
 
 var C = import("_common")
-var jpeg = import("_img_o6769_jpeg")
-var gif = import("_img_o6769_gif")
-var Image = import("img_image")
+var jpeg = import("img/_jpeg")
+var gif = import("img/_gif")
+var Image = import("img/image")
 var path = import("path")
 var io = import("io")
 
@@ -115,8 +115,8 @@ catch as e:
 s.truthy("gif.frames handles truncated cleanly",
          lenient_result == "threw" or type(lenient_result) == "List")
 
-# ----------------------------------------------------------------- integration through img_image
-# The public path: Image.open(...) sniffs a JPEG (255, 216) magic and lazily loads _img_o6769_jpeg.
+# ----------------------------------------------------------------- integration through img/image
+# The public path: Image.open(...) sniffs a JPEG (255, 216) magic and lazily loads img/_jpeg.
 var tmpJpeg = path.join(path.gettempdir(), "img_internal_test.jpg")
 var fj = io.open(tmpJpeg, "wb")
 fj.write(oneJpeg)

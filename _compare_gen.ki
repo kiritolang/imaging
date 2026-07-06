@@ -2,7 +2,7 @@
 # against Pillow. Not a standalone test (leading underscore); driven by compare_pillow.py. Writes
 # PNGs into a temp subdirectory and prints that directory as its last line.
 
-var Image = import("img_image")
+var Image = import("img/image")
 var path = import("path")
 var io = import("io")
 var sys = import("sys")

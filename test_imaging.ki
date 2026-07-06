@@ -3,11 +3,11 @@
 # Every check is an assert (a failure aborts with a clear message); the final line is a stable marker
 # the CTest golden test matches against. Temp files go to the system temp dir.
 
-var Image = import("img_image")
+var Image = import("img/image")
 var path = import("path")
-var ImageOps = import("img_ops")
-var ImageFilter = import("img_filter")
-var ImageDraw = import("img_draw")
+var ImageOps = import("img/ops")
+var ImageFilter = import("img/filter")
+var ImageDraw = import("img/draw")
 var io = import("io")
 var sys = import("sys")
 var serialize = import("serialize")

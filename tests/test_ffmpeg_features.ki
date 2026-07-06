@@ -7,9 +7,9 @@
 # not require it for the pure-Kirito backends. When ffmpeg IS available, every path is exercised.
 
 var C = import("_common")
-var Image = import("img_image")
-var cv = import("img_video")
-var ff = import("_img_o6769_ffmpeg")
+var Image = import("img/image")
+var cv = import("img/video")
+var ff = import("img/_ffmpeg")
 var path = import("path")
 var io = import("io")
 var sys = import("sys")

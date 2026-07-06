@@ -60,29 +60,36 @@ operations rather than per-pixel loops.
 
 ### Module layout (namespace)
 
-Kirito's packages live in a single, flat list of importable modules (no nested `imaging.Ops`
-sub-namespaces). We layer manually with a prefix:
+Kirito's import path resolves `import("a/b")` to `a/b.ki` on any dir on the import path, so we
+layer the package under an `img/` directory. Two tiers:
 
-- **`img_*`** — the public surface. Each module is imported directly:
-  - `img_image` — the `Image` class + `open`/`save`/`new`/`fromtensor`/`merge`/`blend` +
+- **`img/*`** — the public surface. Each module is imported directly:
+  - `img/image` — the `Image` class + `open`/`save`/`new`/`fromtensor`/`merge`/`blend` +
     PNG/PPM/PGM/BMP codecs (and JPEG save when ffmpeg is available).
-  - `img_ops` — Pillow-style `ImageOps` (invert, grayscale, autocontrast, equalize, ...).
-  - `img_filter` — convolution + rank filters (`BLUR`, `SHARPEN`, `GaussianBlur(r)`, ...).
-  - `img_draw` — 2-D drawing primitives (line/rectangle/ellipse/polygon).
-  - `img_video` — an OpenCV-style `VideoCapture` (MJPEG/GIF/Y4M/image-sequence/HTTP-MJPEG in pure
+  - `img/ops` — Pillow-style `ImageOps` (invert, grayscale, autocontrast, equalize, ...).
+  - `img/filter` — convolution + rank filters (`BLUR`, `SHARPEN`, `GaussianBlur(r)`, ...).
+  - `img/draw` — 2-D drawing primitives (line/rectangle/ellipse/polygon).
+  - `img/video` — an OpenCV-style `VideoCapture` (MJPEG/GIF/Y4M/image-sequence/HTTP-MJPEG in pure
     Kirito; MP4 / H.264 / HEVC / AV1 / RTSP / RTMP via ffmpeg transcode).
-- **`_img_o6769_*`** — internal modules, name-mangled with a random suffix so they do not clash
-  with anything a user or another package might install. Never `import` these from application
-  code — reach them through `img_image.open(...)` / `img_image.save(...)` / `img_video`.
-  - `_img_o6769_jpeg` — baseline JPEG decoder (pure Kirito).
-  - `_img_o6769_gif` — GIF87a/89a decoder (pure Kirito).
-  - `_img_o6769_ffmpeg` — subprocess wrapper for the external `ffmpeg` binary. All JPEG encode
-    and compressed-video / RTSP paths go through here. If ffmpeg is not on `PATH` (or
-    `$IMG_FFMPEG`), the ffmpeg-backed paths throw a clear installation message; every pure-Kirito
-    path keeps working with no external dependency.
+- **`img/_*`** — internal modules, marked by a leading underscore inside the same directory. This
+  is a private-by-convention marker, NOT a language-level access check; the convention is that a
+  user's program never types a module path with a `_` component. Reach these only via
+  `img/image.open(...)` / `img/image.save(...)` / `img/video`.
+  - `img/_jpeg` — baseline JPEG decoder (pure Kirito).
+  - `img/_gif` — GIF87a/89a decoder (pure Kirito).
+  - `img/_ffmpeg` — subprocess wrapper for the external `ffmpeg` binary. All JPEG encode and
+    compressed-video / RTSP paths go through here. If ffmpeg is not on `PATH` (or `$IMG_FFMPEG`),
+    the ffmpeg-backed paths throw a clear installation message; every pure-Kirito path keeps
+    working with no external dependency.
 
-**Rule:** anything that is not a supported public entry point goes under `_img_o6769_`. A user's
-program should only ever type module names starting with `img_`.
+**Rule:** anything that is not a supported public entry point goes under `img/_*.ki`. A user's
+program should only ever type module paths of the form `img/<name>` with no leading underscore on
+the last component.
+
+_Historical note: releases up through 1.3.x used a flat namespace (`img_image`, `_img_o6769_jpeg`,
+…) because `import` didn't accept slashes. `ki 1.12+` supports directory imports, so `img_*.ki` was
+folded into `img/*.ki`. The internal `_img_o6769_` random-suffix mangling was there to avoid a
+flat-namespace clash with sibling packages, which the `img/` directory already gives us._
 
 ### Optional runtime dependency: `ffmpeg`
 
@@ -90,11 +97,11 @@ program should only ever type module names starting with `img_`.
 
 - **JPEG encoding** — `Image.save("*.jpg")` and `.tobytes("jpeg", quality=…)`.
 - **Compressed video** — MP4 / MKV / MOV / AVI / WebM / FLV / TS / H.264 / HEVC / AV1 sources, plus
-  RTSP / RTMP live streams, opened through `img_video.VideoCapture(...)`.
+  RTSP / RTMP live streams, opened through `img/video.VideoCapture(...)`.
 
 The subprocess is spawned via `sys.createprocess`. Because `sys.createprocess` decodes stdout as
 UTF-8 (mangling binary), everything routes through temp files (`io.open(...,"rb"/"wb")`) rather
-than pipes — see `_img_o6769_ffmpeg.ki`.
+than pipes — see `img/_ffmpeg.ki`.
 
 ### Style
 
