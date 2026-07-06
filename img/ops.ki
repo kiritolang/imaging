@@ -1,8 +1,8 @@
-# img_ops.ki -- whole-image operations for `img_image`, in the spirit of Pillow's ImageOps.
+# img/ops.ki -- whole-image operations for `img/image`, in the spirit of Pillow's ImageOps.
 # Each function takes an Image and returns a new Image. Channel maths is vectorised through the
 # `tensor` backend; histogram-driven ops (autocontrast, equalize) build a per-channel lookup table.
 
-var imaging = import("img_image")
+var imaging = import("img/image")
 var T = import("tensor")
 
 # Split colour channels from an optional trailing alpha so colour-only ops leave alpha untouched.

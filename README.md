@@ -23,24 +23,25 @@ kpm install kiritolang/imaging
 ```
 
 That drops the package into `~/.kirito/packages/imaging/` and puts its modules on the import path.
-The public surface lives in the `img_` namespace (one flat list; Kirito has no nested modules):
+The public surface lives in the `img/` directory namespace (`ki` resolves `import("img/name")`
+to `img/name.ki` under any dir on the import path):
 
 ```kirito
-var Image      = import("img_image")     # the Image class + open/save/new/blend/merge
-var ImageOps   = import("img_ops")       # ImageOps: invert, grayscale, autocontrast, ...
-var ImageFilter = import("img_filter")   # convolution + rank filters
-var ImageDraw  = import("img_draw")      # drawing primitives
-var cv         = import("img_video")     # OpenCV-style VideoCapture
+var Image      = import("img/image")     # the Image class + open/save/new/blend/merge
+var ImageOps   = import("img/ops")       # ImageOps: invert, grayscale, autocontrast, ...
+var ImageFilter = import("img/filter")   # convolution + rank filters
+var ImageDraw  = import("img/draw")      # drawing primitives
+var cv         = import("img/video")     # OpenCV-style VideoCapture
 ```
 
-The two codec back-ends (`_img_o6769_jpeg`, `_img_o6769_gif`) are internal — reach them through
-`Image.open(...)` and the video reader. Their `_img_o6769_` prefix keeps them out of the way in
-`import` / `inspect` listings.
+The three internal codecs (`img/_jpeg`, `img/_gif`, `img/_ffmpeg`) are private by convention —
+their leading underscore says "not for direct use", reach them via `Image.open(...)` /
+`Image.save(...)` / the video reader.
 
 Pin a version or track a branch by appending `@ref`:
 
 ```
-kpm install kiritolang/imaging@^1.2.0    # highest 1.x
+kpm install kiritolang/imaging@^1.4.0    # highest 1.x
 kpm install kiritolang/imaging@main      # tip of main
 ```
 
@@ -55,27 +56,29 @@ ki test_imaging.ki  # the self-test (asserts; prints ALL TESTS PASSED)
 ## Layout
 
 ```
-kirito.json          the kpm manifest (name/version/modules)
-img_image.ki         Image class + new/open/save/fromtensor/merge/blend + PNG/PPM/PGM/BMP codecs
-img_ops.ki           ImageOps: invert/grayscale/mirror/flip/posterize/solarize/autocontrast/equalize/...
-img_filter.ki        ImageFilter: convolution kernels (BLUR/SHARPEN/...) + Gaussian/Box/rank filters
-img_draw.ki          ImageDraw: point/line/rectangle/ellipse/polygon (mutating primitives)
-img_video.ki         VideoCapture: MJPEG / GIF / Y4M / image-sequence / MJPEG-over-HTTP backends
-_img_o6769_jpeg.ki   internal baseline JPEG decoder (Huffman + tensor IDCT + YCbCr->RGB)
-_img_o6769_gif.ki    internal GIF87a/89a decoder (LZW + palette + animation compositing)
-demo.ki / demo_video.ki   tours that produce real PNGs / extract video frames
+kirito.json             the kpm manifest (name/version/modules)
+img/image.ki            Image class + new/open/save/fromtensor/merge/blend + PNG/PPM/PGM/BMP codecs
+img/ops.ki              ImageOps: invert/grayscale/mirror/flip/posterize/solarize/autocontrast/equalize/...
+img/filter.ki           ImageFilter: convolution kernels (BLUR/SHARPEN/...) + Gaussian/Box/rank filters
+img/draw.ki             ImageDraw: point/line/rectangle/ellipse/polygon (mutating primitives)
+img/video.ki            VideoCapture: MJPEG/GIF/Y4M/image-sequence/HTTP-MJPEG natively + MP4/H.264/RTSP via ffmpeg
+img/_jpeg.ki            (internal) baseline JPEG decoder (Huffman + tensor IDCT + YCbCr->RGB)
+img/_gif.ki             (internal) GIF87a/89a decoder (LZW + palette + animation compositing)
+img/_ffmpeg.ki          (internal) ffmpeg subprocess wrapper (JPEG encode, MP4/RTSP transcode)
+demo.ki / demo_video.ki tours that produce real PNGs / extract video frames
 test_imaging.ki / test_video.ki   the self-tests (asserts; the nightly workflow runs both)
+tests/                  per-symbol test suite (auto-discovered by tools/scripts/run_tests.sh)
 compare_pillow.py / compare_video_pillow.py   pixel-for-pixel cross-validation against Pillow
-testdata/            tiny committed MJPEG + GIF assets the video self-test decodes
+testdata/               tiny committed MJPEG + GIF assets the video self-test decodes
 ```
 
 ## Quick start
 
 ```kirito
 var io = import("io")
-var Image = import("img_image")
-var ImageFilter = import("img_filter")
-var ImageOps = import("img_ops")
+var Image = import("img/image")
+var ImageFilter = import("img/filter")
+var ImageOps = import("img/ops")
 
 var im = Image.open("photo.png")        # PNG / PPM / PGM / BMP, sniffed from the header
 io.print(im.mode, im.size)              # e.g. RGB [640, 480]
@@ -108,7 +111,7 @@ The module object *is* the `Image` namespace, so it reads just like `from PIL im
 | `img.point(fn)` | remap every channel value through `fn` (via a 256-entry LUT) |
 | `img.split()` / `Image.merge(mode, bands)` | separate / recombine channels |
 | `img.histogram()` | per-channel 256-bin histogram |
-| `img.filter(flt)` | apply an `img_filter` (see below) |
+| `img.filter(flt)` | apply an `img/filter` (see below) |
 | `img.tensor()` / `Image.fromtensor(t, mode)` | the **tensor bridge** — drop to raw `(H,W,C)` and back |
 | `img.tolist()` | a nested List of Integer pixels |
 | `Image.blend(a, b, alpha)` | linear cross-fade of two same-size images |
@@ -116,16 +119,16 @@ The module object *is* the `Image` namespace, so it reads just like `from PIL im
 ## ImageOps, ImageFilter, ImageDraw
 
 ```kirito
-var ImageOps = import("img_ops")
+var ImageOps = import("img/ops")
 # invert, grayscale, mirror, flip, posterize(bits), solarize(threshold), autocontrast(cutoff),
 # equalize, expand(border, fill), colorize(black, white), scale(factor), fit(size)
 
-var ImageFilter = import("img_filter")
+var ImageFilter = import("img/filter")
 # kernels: BLUR, SHARPEN, SMOOTH, SMOOTH_MORE, DETAIL, EDGE_ENHANCE(_MORE), FIND_EDGES, EMBOSS, CONTOUR
 # parametric: GaussianBlur(radius), BoxBlur(radius), MedianFilter(size), MinFilter(size), MaxFilter(size)
 # custom:     Kernel(size, flat_kernel[, scale[, offset]])
 
-var ImageDraw = import("img_draw")
+var ImageDraw = import("img/draw")
 var d = ImageDraw.Draw(img)
 d.line([0, 0, 99, 99], [255, 0, 0])
 d.rectangle([10, 10, 40, 30], [0, 0, 80], [255, 255, 0])   # fill, outline
@@ -163,8 +166,8 @@ operation is element assignment (`t[i, j] = v`), and that is exactly what `putpi
 | PNG | ✓ | ✓ | 8-bit, colour types 0/2/6 (L/RGB/RGBA); decodes all five scanline filters incl. Paeth; zlib via the stdlib |
 | PPM/PGM | ✓ | ✓ | binary Netpbm (P6/P5); handles `#` comments on read |
 | BMP | ✓ | ✓ | 24-bit uncompressed, bottom-up BGR |
-| JPEG | ✓ | ✓* | decode: baseline (sequential-DCT, Huffman); grey + YCbCr 4:4:4/4:2:2/4:2:0, restart markers (`_img_o6769_jpeg.ki`). encode: `.save("x.jpg")` / `.tobytes("jpeg")`, quality 0..100 (default 90), via ffmpeg subprocess (`_img_o6769_ffmpeg.ki`). |
-| GIF | ✓ | — | GIF87a/89a, static + animated (LZW, palette, interlace, transparency, disposal) (`_img_o6769_gif.ki`) |
+| JPEG | ✓ | ✓* | decode: baseline (sequential-DCT, Huffman); grey + YCbCr 4:4:4/4:2:2/4:2:0, restart markers (`img/_jpeg.ki`). encode: `.save("x.jpg")` / `.tobytes("jpeg")`, quality 0..100 (default 90), via ffmpeg subprocess (`img/_ffmpeg.ki`). |
+| GIF | ✓ | — | GIF87a/89a, static + animated (LZW, palette, interlace, transparency, disposal) (`img/_gif.ki`) |
 
 `✓*` = requires an `ffmpeg` binary on `PATH` at runtime (or `$IMG_FFMPEG`). Everything else is pure Kirito with no external dependency.
 
@@ -182,13 +185,13 @@ paths throw a clear error pointing at how to install it; the other formats keep 
 
 ## Video — an OpenCV-style `VideoCapture`
 
-`img_video.ki` reads video as a sequence of frames, in the spirit of `cv2.VideoCapture`, from every
+`img/video.ki` reads video as a sequence of frames, in the spirit of `cv2.VideoCapture`, from every
 source it can reach — the pure-Kirito backends (MJPEG / GIF / Y4M / image-sequence / HTTP-MJPEG)
 plus an ffmpeg-backed path for **compressed video and RTSP** (MP4 / MKV / MOV / AVI / WebM / FLV /
 TS / H.264 / HEVC / AV1 / RTSP / RTMP …):
 
 ```kirito
-var cv = import("img_video")
+var cv = import("img/video")
 
 # Pure-Kirito backends -- no external dependency.
 var cap = cv.VideoCapture("clip.mjpeg")            # or "anim.gif", "clip.y4m",
@@ -205,7 +208,7 @@ while True:
     var ok_frame = cap.read()                       # [ok, Image]
     if not ok_frame[0]:
         break
-    discard ok_frame[1].filter(import("img_filter").FIND_EDGES)   # frames are img_image Images
+    discard ok_frame[1].filter(import("img/filter").FIND_EDGES)   # frames are img/image Images
 cap.release()
 # or: for frame in cap: ...
 ```

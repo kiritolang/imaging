@@ -1,11 +1,11 @@
-# _img_o6769_jpeg.ki -- baseline (sequential DCT, Huffman) JPEG decoder in pure Kirito, on the tensor
-# backend. INTERNAL module of the imaging package: import via `img_image.open(...)` / `img_video`;
-# the `_img_o6769_` prefix keeps it out of the way in the flat global module list.
+# img/_jpeg.ki -- baseline (sequential DCT, Huffman) JPEG decoder in pure Kirito, on the tensor
+# backend. INTERNAL module of the imaging package: import via `img/image.open(...)` / `img/video`.
+# The leading underscore is our private-by-convention marker within the `img/` namespace.
 #
 # Decodes the JFIF/JPEG most cameras and `Pillow.save(..., "JPEG")` produce: 8-bit, Huffman-coded,
 # colour types grey (1 component) and YCbCr (3 components, any of 4:4:4 / 4:2:2 / 4:2:0 chroma
 # subsampling), with restart markers. Progressive (SOF2) and arithmetic coding are rejected. This is
-# what makes MJPEG (a stream of JPEGs) readable -- see `img_video`.
+# what makes MJPEG (a stream of JPEGs) readable -- see `img/video`.
 #
 # The 8x8 inverse DCT and the YCbCr->RGB conversion run on `tensor`; the Huffman entropy stage is a
 # bit-level loop (unavoidably scalar). `decode(bytes) -> [tensor(H,W,C), mode]`.

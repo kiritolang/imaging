@@ -1,4 +1,4 @@
-# img_filter.ki -- convolution and rank filters for `img_image`, in the spirit of Pillow's
+# img/filter.ki -- convolution and rank filters for `img/image`, in the spirit of Pillow's
 # ImageFilter. Each filter exposes `apply(tensor) -> tensor`; pass one to `img.filter(...)`.
 #
 # Convolution is expressed entirely with `tensor` ops: the image is edge-padded, then for each

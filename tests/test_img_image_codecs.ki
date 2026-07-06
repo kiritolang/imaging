@@ -1,14 +1,14 @@
-# test_img_image_codecs.ki -- byte-level round-trips for every codec built into img_image
+# test_img_image_codecs.ki -- byte-level round-trips for every codec built into img/image
 # (PNG, PPM/PGM, BMP), plus adversarial garbage / truncation / unsupported-variant handling.
 # JPEG and GIF are decode-only and are covered in test_internal_codecs.ki.
 
 var C = import("_common")
-var Image = import("img_image")
+var Image = import("img/image")
 var T = import("tensor")
 var path = import("path")
 var io = import("io")
 
-var s = C.Suite("img_image codecs")
+var s = C.Suite("img/image codecs")
 
 # Build a deterministic test image with a distinct value per (y, x, c) so a codec bug in row/column
 # ordering surfaces immediately as wrong pixels.

@@ -1,16 +1,16 @@
-# img_video.ki -- reading video as frames, in the spirit of OpenCV's cv2.VideoCapture.
+# img/video.ki -- reading video as frames, in the spirit of OpenCV's cv2.VideoCapture.
 #
 # Like OpenCV, a VideoCapture is opened on a *source* and yields frames as images. Two tiers of
 # backend:
 #
 # Pure-Kirito (no external dependency):
-#   - MJPEG file (".mjpeg"/".mjpg"): a stream of baseline JPEGs (decoded by `_img_o6769_jpeg`)
-#   - animated GIF (".gif"): composited frames (decoded by `_img_o6769_gif`)
+#   - MJPEG file (".mjpeg"/".mjpg"): a stream of baseline JPEGs (decoded by `img/_jpeg`)
+#   - animated GIF (".gif"): composited frames (decoded by `img/_gif`)
 #   - raw YUV4MPEG2 file (".y4m"): the uncompressed interchange ffmpeg pipes
 #   - image sequence ("dir/frame_%04d.png"): numbered PNG/PPM/BMP/JPEG frames
 #   - network MJPEG stream ("http://host/path"): multipart/x-mixed-replace, read over a socket
 #
-# ffmpeg-backed (requires an `ffmpeg` binary on PATH -- see _img_o6769_ffmpeg.ki):
+# ffmpeg-backed (requires an `ffmpeg` binary on PATH -- see img/_ffmpeg.ki):
 #   - compressed-video files (.mp4/.mkv/.mov/.avi/.webm/.flv/.ts/.m4v/.wmv/.mpg/.mpeg/.3gp/.vob/
 #     .ogv/.m2ts/.mts): H.264/HEVC/VP9/AV1/... whatever ffmpeg reads
 #   - RTSP live streams ("rtsp://host/path"), RTMP ("rtmp://..."), RTSPS
@@ -21,9 +21,9 @@
 # sys.createprocess is synchronous. Pass `duration` (seconds) to cap how much of a live stream is
 # captured; the default for RTSP/RTMP is 30 s so a naive `VideoCapture("rtsp://...")` never wedges.
 #
-# Frames come back as `img_image` Images, so the whole img_image/img_ops/img_filter toolkit applies.
+# Frames come back as `img/image` Images, so the whole img/image/img/ops/img/filter toolkit applies.
 #
-#   var cv = import("img_video")
+#   var cv = import("img/video")
 #   var cap = cv.VideoCapture("clip.gif")
 #   while True:
 #       var pair = cap.read()
@@ -32,10 +32,10 @@
 #       discard pair[1].convert("L").save("frame.png")
 #   cap.release()
 
-var Image = import("img_image")
+var Image = import("img/image")
 var path = import("path")
-var jpeg = import("_img_o6769_jpeg")
-var gif = import("_img_o6769_gif")
+var jpeg = import("img/_jpeg")
+var gif = import("img/_gif")
 var io = import("io")
 var T = import("tensor")
 
@@ -178,7 +178,7 @@ class VideoCapture:
     # backend already reads) and then delegate to _open_mjpeg on that. The temp file lives for the
     # lifetime of the VideoCapture and is deleted in release().
     var _open_ffmpeg = Function(self, source, is_live):
-        var ff = import("_img_o6769_ffmpeg")
+        var ff = import("img/_ffmpeg")
         var tmp = ff.tempfile(".mjpeg")
         var pre = []
         if is_live:

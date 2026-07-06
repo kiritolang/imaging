@@ -1,7 +1,7 @@
-# _img_o6769_ffmpeg.ki -- internal helper that wraps an external `ffmpeg` binary via sys.createprocess.
-# INTERNAL module of the imaging package (public callers reach it via `img_image.save("x.jpg")` /
-# `img_video.VideoCapture("in.mp4")`); the `_img_o6769_` prefix keeps it out of the way in the flat
-# global module list.
+# img/_ffmpeg.ki -- internal helper that wraps an external `ffmpeg` binary via sys.createprocess.
+# INTERNAL module of the imaging package: public callers reach it via `img/image.save("x.jpg")`
+# and `img/video.VideoCapture("in.mp4")`. The leading underscore in the filename is our
+# private-by-convention marker within the `img/` namespace -- treat these modules as internal.
 #
 # Everything JPEG-write, MP4/H.264/HEVC/RTSP-read routes through here. If `ffmpeg` is not on PATH
 # (or `$IMG_FFMPEG` does not point at it), the caller gets a single clear error asking them to
@@ -138,7 +138,7 @@ var transcode_bytes = Function(stdin_bytes, in_ext, out_ext, extra_args = None, 
 
 # Transcode a filesystem SOURCE (path or URL) to a temp file at OUTP with the given ffmpeg args
 # inserted before `-i SOURCE`. Returns OUTP. Caller is responsible for cleanup (this variant is
-# used by img_video, which owns the temp file for the lifetime of the VideoCapture).
+# used by img/video, which owns the temp file for the lifetime of the VideoCapture).
 var transcode_to = Function(source, outp, pre_args = None, post_args = None, timeout = 300):
     var args = ["-hide_banner", "-loglevel", "error", "-y"]
     if pre_args != None:
