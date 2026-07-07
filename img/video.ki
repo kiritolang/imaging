@@ -25,12 +25,16 @@
 #
 #   var cv = import("img/video")
 #   var cap = cv.VideoCapture("clip.gif")
-#   while True:
-#       var pair = cap.read()
-#       if not pair[0]:
-#           break
-#       discard pair[1].convert("L").save("frame.png")
+#   var frame = cap.read()                # -> Image, or None at end-of-stream
+#   while frame != None:
+#       discard frame.convert("L").save("frame.png")
+#       frame = cap.read()
 #   cap.release()
+#
+# Or use the iterator, which unwraps for you:
+#
+#   for frame in cv.VideoCapture("clip.gif"):
+#       discard frame.convert("L").save("frame.png")
 
 var Image = import("img/image")
 var path = import("path")
@@ -141,7 +145,6 @@ class VideoCapture:
         self._buf = None
         self._grabbed = None
         self._opened = False
-        self._temp_transcoded = None    # set when we transcoded through ffmpeg; cleaned on release()
         self._duration = duration
         self._open(source)
 
@@ -174,12 +177,12 @@ class VideoCapture:
             self._open_mjpeg(source)
 
     # ---- compressed video (MP4/MKV/MOV/AVI/WebM/FLV/TS + RTSP/RTMP) via ffmpeg transcode ----
-    # We stage the source as a temp MJPEG file (a stream of baseline JPEGs, which our pure-Kirito
-    # backend already reads) and then delegate to _open_mjpeg on that. The temp file lives for the
-    # lifetime of the VideoCapture and is deleted in release().
+    # We transcode the whole source into an in-memory MJPEG buffer at open() time -- a stream of
+    # baseline JPEGs, which our pure-Kirito backend already reads. sys.createprocess is synchronous
+    # so we can't keep an ffmpeg pipe alive across grab()s; the transcode runs to completion first,
+    # then the native MJPEG backend consumes the buffer. Nothing touches disk.
     var _open_ffmpeg = Function(self, source, is_live):
         var ff = import("img/_ffmpeg")
-        var tmp = ff.tempfile(".mjpeg")
         var pre = []
         if is_live:
             pre.append("-rtsp_transport")
@@ -193,18 +196,23 @@ class VideoCapture:
             # `cv.VideoCapture("rtsp://…")` never wedges.
             post.append("-t")
             post.append("30")
-        discard ff.transcode_to(source, tmp, pre_args = pre, post_args = post, timeout = 600)
-        self._temp_transcoded = tmp
-        # We keep `kind == "mjpeg"` for the dispatch in _read_next (the actual bytes ARE MJPEG);
-        # `.backend` surfaces the true origin for users introspecting the capture.
-        self._open_mjpeg(tmp)
+        var mjpeg_bytes = ff.run_source(source, pre, post, timeout = 600)
+        # `kind` stays "mjpeg" for the dispatch in _read_next (the buffer IS MJPEG); `.backend`
+        # surfaces the true origin for programs introspecting the capture.
+        self._ingest_mjpeg(mjpeg_bytes)
         self.backend = "ffmpeg"
 
     # ---- MJPEG file ----
     var _open_mjpeg = Function(self, path):
         var f = io.open(path, "rb")
-        self._data = f.read()
+        var data = f.read()
         f.close()
+        self._ingest_mjpeg(data)
+
+    # Shared entry point: given a MJPEG Bytes buffer, index the SOI/EOI ranges and set up the
+    # capture. Used by _open_mjpeg (file source) and _open_ffmpeg (transcoded buffer).
+    var _ingest_mjpeg = Function(self, data):
+        self._data = data
         self._ranges = _split_mjpeg(self._data)
         self.kind = "mjpeg"
         self.count = len(self._ranges)
@@ -393,61 +401,68 @@ class VideoCapture:
     var isopened = Function(self):
         return self._opened
 
-    # Decode and return the next frame as [ok, Image]; ok is False past the end of the stream.
+    # Decode and return the next frame as an Image, or None past the end of the stream.
+    # (OpenCV returns [ok, Image] here -- the None sentinel is nicer to check in Kirito.)
     var _read_next = Function(self):
         if not self._opened:
-            return [False, None]
+            return None
         if self.kind == "mjpeg":
             if self.pos >= self.count:
-                return [False, None]
+                return None
             var im = self._decode_range(self.pos)
             self.pos = self.pos + 1
-            return [True, im]
+            return im
         if self.kind == "gif":
             if self.pos >= self.count:
-                return [False, None]
+                return None
             var im = Image.fromtensor(self._frames[self.pos]["rgb"], "RGB")
             self.pos = self.pos + 1
-            return [True, im]
+            return im
         if self.kind == "y4m":
             if self.pos >= self.count:
-                return [False, None]
+                return None
             var im = self._decode_y4m(self.pos)
             self.pos = self.pos + 1
-            return [True, im]
+            return im
         if self.kind == "seq":
             var p = _seq_path(self.source, self._seqstart + self.pos)
             if not path.exists(p):
-                return [False, None]
+                return None
             self.pos = self.pos + 1
-            return [True, Image.open(p)]
+            return Image.open(p)
         if self.kind == "http":
             var im = self._http_next()
             if im == None:
-                return [False, None]
+                return None
             self.pos = self.pos + 1
-            return [True, im]
-        return [False, None]
+            return im
+        return None
 
-    # OpenCV's grab()/retrieve() split: grab() advances to the next frame (and buffers it),
-    # retrieve() returns the buffered frame; read() is grab()+retrieve().
+    # Read the next frame. Returns the Image, or None at end-of-stream:
+    #     var frame = cap.read()
+    #     while frame != None:
+    #         ...
+    #         frame = cap.read()
+    # (OpenCV splits this into grab()+retrieve(); we still expose those below for the seek-fast
+    # cases where you want to advance without decoding, but read() is the natural entry point.)
     var read = Function(self):
         if self.grab():
             return self.retrieve()
-        return [False, None]
+        return None
 
+    # Advance to the next frame (buffering it) without returning it. Returns True if a frame was
+    # captured, False if the stream is exhausted. Pair with retrieve() to get the buffered frame.
     var grab = Function(self):
-        var pair = self._read_next()
-        if pair[0]:
-            self._grabbed = pair[1]
-            return True
-        self._grabbed = None
-        return False
+        var im = self._read_next()
+        if im == None:
+            self._grabbed = None
+            return False
+        self._grabbed = im
+        return True
 
+    # Return the frame buffered by the last grab(), or None if there isn't one.
     var retrieve = Function(self):
-        if self._grabbed == None:
-            return [False, None]
-        return [True, self._grabbed]
+        return self._grabbed
 
     var get = Function(self, prop):
         if prop == CAP_PROP_FRAME_WIDTH:
@@ -477,15 +492,8 @@ class VideoCapture:
         if self._sock != None:
             self._sock.close()
             self._sock = None
-        # If we transcoded via ffmpeg into a temp file, delete it. Never throw on a missing file:
-        # the point of release() is best-effort cleanup, and this container might be running under
-        # sanitisers that clear /tmp between test cases.
-        if self._temp_transcoded != None:
-            try:
-                discard path.remove(self._temp_transcoded, missing_ok = True)
-            catch as e:
-                pass
-            self._temp_transcoded = None
+        # We no longer own any on-disk state -- the ffmpeg backend keeps its transcoded MJPEG
+        # buffer in `self._data` and it gets GC'd with the capture. Just flip the opened flag.
         self._opened = False
         return None
 
@@ -494,10 +502,10 @@ class VideoCapture:
     # network stream prefer the `read()` loop, which is lazy).
     var _iter_ = Function(self):
         var out = []
-        var pair = self.read()
-        while pair[0]:
-            out.append(pair[1])
-            pair = self.read()
+        var frame = self.read()
+        while frame != None:
+            out.append(frame)
+            frame = self.read()
         return out
 
 # Build a (h,w) Float plane (list of rows of Integer byte values) from raw bytes at `off`.

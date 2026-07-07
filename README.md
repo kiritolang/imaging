@@ -41,7 +41,7 @@ their leading underscore says "not for direct use", reach them via `Image.open(.
 Pin a version or track a branch by appending `@ref`:
 
 ```
-kpm install kiritolang/imaging@^1.4.0    # highest 1.x
+kpm install kiritolang/imaging@^1.5.0    # highest 1.x
 kpm install kiritolang/imaging@main      # tip of main
 ```
 
@@ -204,28 +204,34 @@ var rtsp = cv.VideoCapture("rtsp://cam/stream",    #    live: capped at duration
                            duration = 30)          #          (default 30 s for rtsp:// / rtmp://)
 
 io.print(cap.get(cv.CAP_PROP_FRAME_COUNT), cap.width, cap.height, cap.get(cv.CAP_PROP_FPS))
-while True:
-    var ok_frame = cap.read()                       # [ok, Image]
-    if not ok_frame[0]:
-        break
-    discard ok_frame[1].filter(import("img/filter").FIND_EDGES)   # frames are img/image Images
+var frame = cap.read()                              # -> Image, or None at end-of-stream
+while frame != None:
+    discard frame.filter(import("img/filter").FIND_EDGES)
+    frame = cap.read()
 cap.release()
-# or: for frame in cap: ...
+
+# Or the iterator, which unwraps for you:
+for frame in cap:
+    discard frame.filter(import("img/filter").FIND_EDGES)
 ```
 
-The surface mirrors OpenCV: `read` / `grab` / `retrieve`, `isopened`, `get` / `set` with the
-`CAP_PROP_*` ids (random-access seek on file backends), `release`, and `for frame in cap`. Every
-capture also carries `.kind` (the on-disk container type) and `.backend` (`"native"` for the pure-
-Kirito paths, `"ffmpeg"` when we transcoded through `ffmpeg`) so a program can tell how a source is
-being decoded.
+`read()` returns an `img/image` `Image` on success and `None` at end-of-stream — that reads
+naturally as `while frame != None:` or as a `for frame in cap:` iterator. OpenCV's older
+`[ok, frame]` tuple shape is intentionally NOT what we return; the `None` sentinel is easier to
+work with in Kirito. `grab()` (advance without decoding, returns Bool) and `retrieve()` (return
+the last `grab()`'d Image, or None) are still exposed for the seek-fast cases. Every capture also
+carries `.kind` (the container type — `"mjpeg"` / `"gif"` / `"y4m"` / `"seq"` / `"http"`) and
+`.backend` (`"native"` for the pure-Kirito paths, `"ffmpeg"` when we transcoded) so a program can
+tell how a source is being decoded, plus the usual `isopened` / `release` / `get` / `set` with
+the `CAP_PROP_*` ids (random-access seek on file backends).
 
-> **MP4 / H.264 / RTSP** are handled by transcoding the source into a temp MJPEG file at open()
-> time (via `sys.createprocess` → `ffmpeg -i <source> -c:v mjpeg …`), then reading that with the
-> native MJPEG backend. This works because `ffmpeg` is a synchronous one-shot — Kirito has no
-> async subprocess to keep an ffmpeg pipe alive across `grab()`s. For a live RTSP camera pass
-> `duration=…` to control how many seconds get captured (default 30 s). The transcoded temp file
-> is deleted in `release()`. If `ffmpeg` is not installed, the ffmpeg-backed backends throw a
-> clear error; the pure-Kirito backends keep working with zero external dependency.
+> **MP4 / H.264 / RTSP** are handled by transcoding the source into an in-memory MJPEG buffer at
+> `open()` time (via `sys.createprocess(binary=True)` piping bytes through ffmpeg — no disk
+> staging), then reading that with the native MJPEG backend. This works because `ffmpeg` is a
+> synchronous one-shot — Kirito has no async subprocess to keep an ffmpeg pipe alive across
+> `grab()`s. For a live RTSP camera pass `duration=…` to control how many seconds get captured
+> (default 30 s). If `ffmpeg` is not installed, the ffmpeg-backed backends throw a clear error;
+> the pure-Kirito backends keep working with zero external dependency.
 
 ## Cross-validation against Pillow
 

@@ -99,9 +99,12 @@ flat-namespace clash with sibling packages, which the `img/` directory already g
 - **Compressed video** — MP4 / MKV / MOV / AVI / WebM / FLV / TS / H.264 / HEVC / AV1 sources, plus
   RTSP / RTMP live streams, opened through `img/video.VideoCapture(...)`.
 
-The subprocess is spawned via `sys.createprocess`. Because `sys.createprocess` decodes stdout as
-UTF-8 (mangling binary), everything routes through temp files (`io.open(...,"rb"/"wb")`) rather
-than pipes — see `img/_ffmpeg.ki`.
+The subprocess is spawned via `sys.createprocess(..., binary = True)` (ki 1.12.1+), which hands
+stdin/stdout to the child as raw `Bytes` with no UTF-8 round trip. Every JPEG encode and every
+video transcode pipes bytes directly — nothing touches disk. See `img/_ffmpeg.ki`. Earlier
+releases (imaging 1.3.x, ki without `binary=`) had to stage input and output through temp files
+because the default String-mode path mangles bytes with the high bit set — don't reintroduce that
+if you're editing here.
 
 ### Style
 

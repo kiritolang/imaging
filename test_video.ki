@@ -37,15 +37,15 @@ check(cap.count == 3, "mjpeg frame count")
 check(cap.width == 16 and cap.height == 16, "mjpeg size")
 check(cap.get(cv.CAP_PROP_FRAME_COUNT) == 3.0, "mjpeg CAP_PROP_FRAME_COUNT")
 var p0 = cap.read()
-check(p0[0] and p0[1].mode == "RGB", "mjpeg read frame 0")
-check(p0[1].getpixel([0, 0]) == [0, 0, 0], "mjpeg f0 corner")
-check(p0[1].getpixel([8, 8]) == [112, 120, 0], "mjpeg f0 mid")
+check(p0 != None and p0.mode == "RGB", "mjpeg read frame 0")
+check(p0.getpixel([0, 0]) == [0, 0, 0], "mjpeg f0 corner")
+check(p0.getpixel([8, 8]) == [112, 120, 0], "mjpeg f0 mid")
 discard cap.read()
 var p2 = cap.read()
-check(p2[1].getpixel([8, 8]) == [251, 122, 137], "mjpeg f2 mid")
-check(not cap.read()[0], "mjpeg exhausted after 3")
+check(p2.getpixel([8, 8]) == [251, 122, 137], "mjpeg f2 mid")
+check(cap.read() == None, "mjpeg exhausted after 3")
 check(cap.set(cv.CAP_PROP_POS_FRAMES, 0), "mjpeg seek")
-check(cap.read()[1].getpixel([8, 8]) == [112, 120, 0], "mjpeg re-read after seek")
+check(cap.read().getpixel([8, 8]) == [112, 120, 0], "mjpeg re-read after seek")
 cap.release()
 check(not cap.isopened(), "mjpeg released")
 
@@ -67,10 +67,10 @@ var g = cv.VideoCapture(path.join(tdata, "anim.gif"))
 check(g.kind == "gif" and g.count == 4, "gif frame count")
 check(g.width == 12 and g.height == 10, "gif size")
 check(g.get(cv.CAP_PROP_FPS) > 0.0, "gif fps")
-check(g.read()[1].getpixel([6, 5]) == [108, 110, 0], "gif f0 pixel")
+check(g.read().getpixel([6, 5]) == [108, 110, 0], "gif f0 pixel")
 var frames = 1
 var pr = g.read()
-while pr[0]:
+while pr != None:
     frames = frames + 1
     pr = g.read()
 check(frames == 4, "gif read all 4")
@@ -99,9 +99,9 @@ check(sq.kind == "seq" and sq.count == 3, "seq count")
 check(sq.width == 8 and sq.height == 6, "seq size")
 var si = 0
 var sp = sq.read()
-while sp[0]:
-    check(sp[1].getpixel([0, 0]) == colors[si], "seq frame color")
-    check(sp[1].getpixel([1, 1]) == [si, si, si], "seq frame marker")
+while sp != None:
+    check(sp.getpixel([0, 0]) == colors[si], "seq frame color")
+    check(sp.getpixel([1, 1]) == [si, si, si], "seq frame marker")
     si = si + 1
     sp = sq.read()
 check(si == 3, "seq read all")
@@ -131,8 +131,8 @@ yf.close()
 var yc = cv.VideoCapture(y4mpath)
 check(yc.kind == "y4m" and yc.count == 2, "y4m count")
 check(yc.width == 8 and yc.height == 6, "y4m size")
-check(yc.read()[1].getpixel([3, 3]) == [60, 60, 60], "y4m frame 0 grey")
-check(yc.read()[1].getpixel([3, 3]) == [150, 150, 150], "y4m frame 1 grey")
+check(yc.read().getpixel([3, 3]) == [60, 60, 60], "y4m frame 0 grey")
+check(yc.read().getpixel([3, 3]) == [150, 150, 150], "y4m frame 1 grey")
 yc.release()
 
 # ----------------------------------------------------------------- direct codec entry points

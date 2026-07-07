@@ -23,12 +23,11 @@ io.print("opened " + String(cap) + "  frames=" + String(cap.count) +
 # Collect frames and an edge-detected version of each.
 var originals = []
 var edges = []
-var pair = cap.read()
-while pair[0]:
-    var frame = pair[1]
+var frame = cap.read()
+while frame != None:
     originals.append(frame)
     edges.append(ImageOps.autocontrast(frame.convert("L").filter(ImageFilter.FIND_EDGES)).convert("RGB"))
-    pair = cap.read()
+    frame = cap.read()
 cap.release()
 
 var nf = len(originals)
