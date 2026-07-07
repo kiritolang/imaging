@@ -818,9 +818,9 @@ var _bmp_decode = Function(data):
 # quantization) is heavier and duplicates what every ffmpeg install already ships. Using ffmpeg
 # here also matches how img/video handles compressed-video sources (MP4/H.264/RTSP).
 #
-# We stage the source as a PPM/PGM tempfile (lossless Netpbm: byte-exact colour, ffmpeg reads it
-# natively) and take the produced .jpg back as Bytes. sys.createprocess's stdout is UTF-8-decoded
-# and mangles binary, so we never pipe -- every byte round-trips via disk.
+# We hand ffmpeg a PPM/PGM on stdin (Netpbm is our lossless intermediate: no encoder cost, byte-
+# exact colour, and ffmpeg reads it natively) and take the JPEG back on stdout. Both directions
+# go through `binary=True` on sys.createprocess so bytes stay bytes -- no disk staging.
 var _jpeg_encode = Function(d, mode, quality):
     var q = quality
     if q < 1:
@@ -835,17 +835,18 @@ var _jpeg_encode = Function(d, mode, quality):
     if qff > 31:
         qff = 31
     var src = d
-    var in_ext = ".ppm"
+    var interm = "ppm"
     var mode_in = mode
     if mode == "L":
-        in_ext = ".pgm"
+        interm = "pgm"
     if mode == "RGBA":
         src = d.slice(0, 3, 1, 2)                  # baseline JPEG has no alpha
         mode_in = "RGB"
-    var ppm_bytes = _pnm_encode(src, mode_in)
-    var extra = ["-c:v", "mjpeg", "-q:v", String(qff)]
+    var pnm_bytes = _pnm_encode(src, mode_in)
+    var input_args  = ["-f", "image2pipe", "-c:v", interm]
+    var output_args = ["-f", "image2pipe", "-c:v", "mjpeg", "-q:v", String(qff)]
     if mode == "L":
-        extra.append("-pix_fmt")
-        extra.append("gray")
+        output_args.append("-pix_fmt")
+        output_args.append("gray")
     var ff = import("img/_ffmpeg")
-    return ff.transcode_bytes(ppm_bytes, in_ext, ".jpg", extra_args = extra, timeout = 60)
+    return ff.run_pipe(pnm_bytes, input_args, output_args, timeout = 60)

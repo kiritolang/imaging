@@ -55,16 +55,16 @@ s.eq("get(POS_FRAMES) starts at 0", cap.get(cv.CAP_PROP_POS_FRAMES), 0.0)
 s.close("get(POS_MSEC) starts at 0",cap.get(cv.CAP_PROP_POS_MSEC),   0.0, 0.0001)
 s.eq("get(unknown) returns 0", cap.get(999), 0.0)
 
-# grab() advances pos and buffers a frame; retrieve() returns [True, Image] afterwards.
+# grab() advances pos and buffers a frame; retrieve() returns the buffered Image afterwards.
 s.truthy("grab returns true first frame", cap.grab())
 s.eq("pos advanced after grab", cap.pos, 1)
 var got = cap.retrieve()
-s.eq("retrieve after grab is [True, Image]", got[0], True)
-s.eq("retrieved Image mode",   got[1].mode, "RGB")
-# read() = grab() + retrieve() -> [True, Image].
+s.truthy("retrieve after grab is an Image", got != None)
+s.eq("retrieved Image mode",   got.mode, "RGB")
+# read() = grab() + retrieve() -> the Image (or None past end-of-stream).
 var pr = cap.read()
-s.eq("read returns [True, Image]", pr[0], True)
-s.eq("frame is RGB Image", pr[1].mode, "RGB")
+s.truthy("read returns an Image", pr != None)
+s.eq("frame is RGB Image", pr.mode, "RGB")
 
 # seek back to 0 via set(POS_FRAMES).
 s.truthy("set(POS_FRAMES, 0) returns True", cap.set(cv.CAP_PROP_POS_FRAMES, 0))
@@ -75,18 +75,18 @@ s.falsy("set(unknown) returns False", cap.set(999, 5))
 discard cap.set(cv.CAP_PROP_POS_FRAMES, 1)
 s.close("POS_MSEC after seek", cap.get(cv.CAP_PROP_POS_MSEC), 40.0, 0.001)  # 1000/25
 
-# Drain the rest -- read() eventually returns [False, None].
+# Drain the rest -- read() eventually returns None.
 discard cap.set(cv.CAP_PROP_POS_FRAMES, 0)
 var frames = 0
 var next = cap.read()
-while next[0]:
+while next != None:
     frames = frames + 1
     next = cap.read()
 s.eq("drain sees count frames", frames, cap.count)
-s.eq("read past end returns [False, None]", next, [False, None])
+s.eq("read past end returns None", next, None)
 
-# retrieve() after end-of-stream is [False, None] (no frame is buffered).
-s.eq("retrieve after end", cap.retrieve(), [False, None])
+# retrieve() after end-of-stream is None (no frame is buffered).
+s.eq("retrieve after end", cap.retrieve(), None)
 
 # release() closes and sets isopened() to False.
 cap.release()
@@ -103,7 +103,7 @@ s.truthy("gif height>0",capGif.height > 0)
 s.truthy("gif fps>0", capGif.fps > 0.0)
 # The read protocol is identical.
 var g0 = capGif.read()
-s.eq("gif first frame mode", g0[1].mode, "RGB")
+s.eq("gif first frame mode", g0.mode, "RGB")
 capGif.release()
 
 # ----------------------------------------------------------------- iteration (_iter_)
@@ -130,9 +130,9 @@ s.eq("seq count", capSeq.count, 3)
 s.eq("seq width", capSeq.width, 4)
 s.eq("seq height",capSeq.height,4)
 var seq0 = capSeq.read()
-s.eq("seq frame 0 pixel", seq0[1].getpixel([0, 0]), [10, 20, 30])
+s.eq("seq frame 0 pixel", seq0.getpixel([0, 0]), [10, 20, 30])
 var seq1 = capSeq.read()
-s.eq("seq frame 1 pixel", seq1[1].getpixel([0, 0]), [40, 50, 60])
+s.eq("seq frame 1 pixel", seq1.getpixel([0, 0]), [40, 50, 60])
 capSeq.release()
 discard path.rmtree(seqdir)
 
@@ -156,7 +156,7 @@ s.eq("y4m count",  capY4m.count, 2)
 s.close("y4m fps", capY4m.fps, 25.0, 0.001)
 # Frame is (near-)greyscale mid.
 var y4mFrame = capY4m.read()
-s.eq("y4m frame mode", y4mFrame[1].mode, "RGB")
+s.eq("y4m frame mode", y4mFrame.mode, "RGB")
 capY4m.release()
 discard path.remove(y4mPath)
 

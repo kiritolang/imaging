@@ -26,23 +26,32 @@ if not ff.available():
 s.truthy("ff.available()", ff.available())
 s.truthy("ff.require() returns a path", len(ff.require()) > 0)
 
-# tempfile: distinct paths under the OS temp dir, and the extension is preserved.
-var t1 = ff.tempfile(".jpg")
-var t2 = ff.tempfile(".jpg")
-s.ne("tempfile paths are distinct", t1, t2)
-s.truthy("tempfile ends with .jpg", t1[len(t1) - 4:] == ".jpg")
-s.truthy("tempfile in system tempdir", t1.startswith(path.gettempdir()))
-
-# read_bytes / write_bytes round-trip a real byte blob (bytes with high bit).
-var probe = ff.tempfile(".bin")
-ff.write_bytes(probe, Bytes([255, 216, 0, 137, 80]))
-var back = ff.read_bytes(probe)
-s.eq("read_bytes round-trip length", len(back), 5)
-s.eq("read_bytes preserves 0xFF byte", back[0], 255)
-s.eq("read_bytes preserves 0x00 byte", back[2], 0)
-ff.quiet_remove(probe)
-# quiet_remove is idempotent -- a second call on a missing file is a no-op.
-ff.quiet_remove(probe)
+# run_pipe: hand ffmpeg bytes on stdin, get bytes back on stdout, no disk involvement. Verify with
+# a trivial identity transcode -- PPM in, PPM out -- so any byte corruption crossing the pipes is
+# obvious. Use a deterministic RGB pattern that spans the whole 0..255 byte range.
+var _make_ppm = Function(w, h):
+    var header = ("P6\n" + String(w) + " " + String(h) + "\n255\n").encode("ascii")
+    var pixels = []
+    var i = 0
+    while i < w * h * 3:
+        pixels.append(i * 17 % 256)
+        i = i + 1
+    return header + Bytes(pixels)
+var probe_in = _make_ppm(4, 4)
+var probe_out = ff.run_pipe(probe_in,
+                            ["-f", "image2pipe", "-c:v", "ppm"],
+                            ["-f", "image2pipe", "-c:v", "ppm"])
+s.eq("run_pipe stdout type is Bytes", type(probe_out), "Bytes")
+s.truthy("run_pipe stdout is non-empty", len(probe_out) > 0)
+s.truthy("run_pipe preserves 0xFF byte on stdin",
+         probe_in.hex().find("ff") >= 0)                                # sanity: input had 0xFF
+s.eq("run_pipe identity round-trip", probe_out, probe_in)                # byte-exact
+# Bad ffmpeg args surface the ffmpeg error tail, not a silent corruption.
+s.throws("run_pipe surfaces ffmpeg errors",
+         Function(): return ff.run_pipe(Bytes([0, 1, 2, 3]),
+                                        ["-f", "image2pipe", "-c:v", "ppm"],
+                                        ["-f", "image2pipe", "-c:v", "ppm"]),
+         "ffmpeg failed")
 
 # ----------------------------------------------------------------- JPEG encode + decode round trip
 # Build a small colourful image with a known pattern so a lossy round trip is still recognisable.
@@ -129,10 +138,10 @@ s.truthy("mp4 count > 0",              capMp4.count > 0)
 s.eq("mp4 width",  capMp4.width,  64)
 s.eq("mp4 height", capMp4.height, 48)
 # read() returns a real frame.
-var mpair = capMp4.read()
-s.eq("mp4 first frame ok", mpair[0], True)
-s.eq("mp4 first frame mode", mpair[1].mode, "RGB")
-s.eq("mp4 first frame size", mpair[1].size, [64, 48])
+var mframe = capMp4.read()
+s.truthy("mp4 first frame ok", mframe != None)
+s.eq("mp4 first frame mode", mframe.mode, "RGB")
+s.eq("mp4 first frame size", mframe.size, [64, 48])
 capMp4.release()
 # release cleans up the intermediate MJPEG temp file (we can't check the path -- it's private).
 s.falsy("mp4 released", capMp4.isopened())
