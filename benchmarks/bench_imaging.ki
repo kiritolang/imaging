@@ -1,0 +1,75 @@
+# bench_imaging.ki -- measure imaging's per-operation wall time.
+#
+#   ki bench_imaging.ki [fixture.png] [reps]
+#
+# Prints one TAB-separated line per operation to stdout:
+#   imaging OP_NAME    BEST_MS
+# so run.sh can merge with the Python-side output. `reps` defaults to 5; we report the fastest
+# of `reps` runs to sidestep GC/JIT-warmup noise. The image is loaded once outside the timing
+# loop -- codec speed isn't what we're measuring.
+
+var Image      = import("img/image")
+var ImageOps   = import("img/ops")
+var ImageFilter = import("img/filter")
+var time       = import("time")
+var io         = import("io")
+var sys        = import("sys")
+
+var FIXTURE = "fixture.png"
+if len(arglist) >= 1:
+    FIXTURE = arglist[0]
+var REPS = 5
+if len(arglist) >= 2:
+    REPS = Integer(arglist[1])
+
+var src = Image.open(FIXTURE)
+io.eprint("imaging  " + String(src.width) + "x" + String(src.height) + " " + src.mode + "  reps=" + String(REPS))
+
+# Best of N runs: run the closure REPS times, return the minimum wall time in ms.
+var best_ms = Function(fn):
+    var best = -1.0
+    var i = 0
+    while i < REPS:
+        var t0 = time.perfcounterns()
+        discard fn()
+        var t1 = time.perfcounterns()
+        var ms = Float(t1 - t0) / 1000000.0
+        if best < 0.0 or ms < best:
+            best = ms
+        i = i + 1
+    return best
+
+var report = Function(op, fn):
+    var ms = best_ms(fn)
+    io.print("imaging\t" + op + "\t" + String(ms))
+
+# `translate_paste` isn't a public method -- we implement translation the way a user would:
+# fresh canvas, paste at an offset. That's exactly what Pillow's docs suggest for translation.
+var _translate_paste = Function(im, dx, dy):
+    var out = Image.new(im.mode, [im.width, im.height], 0)
+    out.paste(im, [dx, dy])
+    return out
+
+# Bind each fixture we need up-front so timing captures the OP only, not attribute lookups.
+var BILINEAR = Image.BILINEAR
+var GB2      = ImageFilter.GaussianBlur(2)
+var BB2      = ImageFilter.BoxBlur(2)
+var MED3     = ImageFilter.MedianFilter(3)
+var FIND_EDGES = ImageFilter.FIND_EDGES
+
+# Match the operations one-for-one across all three libraries so the comparison is fair.
+report("flip_horizontal",   Function(): return src.transpose(Image.FLIP_LEFT_RIGHT))
+report("flip_vertical",     Function(): return src.transpose(Image.FLIP_TOP_BOTTOM))
+report("rotate_90",         Function(): return src.rotate(90))
+report("rotate_180",        Function(): return src.rotate(180))
+report("translate_paste",   Function(): return _translate_paste(src, 16, 8))
+report("gaussian_blur_r2",  Function(): return src.filter(GB2))
+report("box_blur_r2",       Function(): return src.filter(BB2))
+report("median_3x3",        Function(): return src.filter(MED3))
+report("find_edges",        Function(): return src.filter(FIND_EDGES))
+report("convert_rgb_to_l",  Function(): return src.convert("L"))
+report("resize_half_bilin", Function(): return src.resize([src.width // 2, src.height // 2], BILINEAR))
+report("resize_2x_bilin",   Function(): return src.resize([src.width * 2, src.height * 2], BILINEAR))
+report("invert",            Function(): return ImageOps.invert(src))
+report("autocontrast",      Function(): return ImageOps.autocontrast(src))
+report("equalize",          Function(): return ImageOps.equalize(src))
