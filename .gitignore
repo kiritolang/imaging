@@ -16,3 +16,6 @@ __pycache__/
 # Comparison / demo output
 compare_out/
 demo_out/
+
+# Benchmark artifacts (fixture.png is regenerated on every run.sh)
+benchmarks/fixture.png
