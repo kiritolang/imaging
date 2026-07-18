@@ -497,16 +497,17 @@ class VideoCapture:
         self._opened = False
         return None
 
-    # Iteration: `for frame in cap:` yields successive Images. Kirito's `_iter_` must return an
-    # iterable, so we drain the remaining frames into a List (fine for finite video; for an unbounded
-    # network stream prefer the `read()` loop, which is lazy).
+    # Iteration: `for frame in cap:` yields successive Images. Kirito 1.16+'s `_iter_` must
+    # return an actual iterator (not a List), so we drain the remaining frames into a List and
+    # wrap it with iter(). Fine for finite video; for an unbounded network stream prefer the
+    # `read()` loop, which is lazy.
     var _iter_ = Function(self):
         var out = []
         var frame = self.read()
         while frame != None:
             out.append(frame)
             frame = self.read()
-        return out
+        return iter(out)
 
 # Build a (h,w) Float plane (list of rows of Integer byte values) from raw bytes at `off`.
 var _plane = Function(data, off, w, h):

@@ -27,25 +27,25 @@ their tab-separated output into a Markdown table.
 
 ## Sample results
 
-`ki 1.12.1` vs Pillow 12.3.0 vs OpenCV 5.0.0, 128×128 RGB, best of 5. Times in ms:
+`ki 1.16.1` vs Pillow 12.3.0 vs OpenCV 5.0.0, 128×128 RGB, best of 5. Times in ms:
 
 | operation         |    imaging |     pillow |     opencv |   vs pil |    vs cv |
 |-------------------|------------|------------|------------|----------|----------|
-| flip_horizontal   |       1.58 |       0.01 |       0.00 |   145.1x |   523.2x |
-| flip_vertical     |       1.61 |       0.00 |       0.00 |   434.7x |   609.9x |
-| rotate_90         |       2.25 |       0.01 |       0.01 |   186.8x |   335.1x |
-| rotate_180        |       3.18 |       0.01 |       0.00 |   332.2x |  1033.5x |
-| translate_paste   |      22.08 |       0.06 |       0.11 |   359.3x |   196.2x |
-| gaussian_blur_r2  |     105.49 |       0.39 |       0.03 |   268.9x |  3254.1x |
-| box_blur_r2       |     100.96 |       0.14 |       0.01 |   727.5x |  7373.4x |
-| median_3x3        |     103.44 |       0.95 |       0.02 |   109.4x |  4874.0x |
-| find_edges        |     102.22 |       0.23 |       0.05 |   445.9x |  2040.2x |
-| convert_rgb_to_l  |      10.16 |       0.01 |       0.01 |   694.8x |  1360.7x |
-| resize_half_bilin |      10.74 |       0.08 |       0.01 |   126.6x |  1653.8x |
-| resize_2x_bilin   |      81.33 |       0.42 |       0.08 |   195.1x |  1037.4x |
-| invert            |       4.70 |       0.05 |       0.00 |    90.8x |  1743.0x |
-| autocontrast      |      48.93 |       0.15 |       0.00 |   324.5x | 21101.3x |
-| equalize          |      79.00 |       0.14 |       0.05 |   560.2x |  1545.0x |
+| flip_horizontal   |       3.61 |       0.01 |       0.01 |   249.5x |   598.6x |
+| flip_vertical     |       3.71 |       0.01 |       0.00 |   674.2x |  1071.2x |
+| rotate_90         |      10.56 |       0.01 |       0.01 |   708.4x |  1011.5x |
+| rotate_180        |      14.80 |       0.01 |       0.01 |  1141.1x |  2497.8x |
+| translate_paste   |      42.50 |       0.08 |       0.07 |   516.7x |   618.5x |
+| gaussian_blur_r2  |     486.58 |       0.54 |       0.02 |   903.9x | 20341.1x |
+| box_blur_r2       |     460.58 |       0.21 |       0.02 |  2153.0x | 21793.3x |
+| median_3x3        |     242.23 |       1.41 |       0.03 |   171.3x |  7424.7x |
+| find_edges        |     202.09 |       0.38 |       0.06 |   526.6x |  3408.3x |
+| convert_rgb_to_l  |      20.47 |       0.02 |       0.01 |   957.7x |  1811.9x |
+| resize_half_bilin |      21.61 |       0.12 |       0.01 |   179.7x |  2176.1x |
+| resize_2x_bilin   |      44.05 |       0.63 |       0.10 |    69.5x |   431.3x |
+| invert            |       0.31 |       0.09 |       0.00 |     3.6x |   123.1x |
+| autocontrast      |      83.47 |       0.24 |       0.00 |   354.4x | 28585.1x |
+| equalize          |     143.51 |       0.20 |       0.06 |   705.5x |  2229.2x |
 
 `vs pil` / `vs cv` show how many times **slower** imaging is; `1.0x` would be a tie.
 
@@ -54,12 +54,16 @@ their tab-separated output into a Markdown table.
 - **The absolute time is small on 128×128** — every op under 110 ms — so a script that processes
   a handful of images per minute won't notice. What suffers is a script that touches thousands
   of images in a loop.
-- **Kirito's vectorised paths (filters, resize, convert) are within ~100–500× of Pillow.** That
+- **Kirito's vectorised paths (filters, resize, convert) are within ~100–2000× of Pillow.** That
   reflects Kirito's interpreter overhead per tensor op — the actual arithmetic runs in C, but
   every op dispatch pays for name lookup + result construction + GC roots. Pillow is C from top
   to bottom.
-- **Simple flips are the closest match** because they compile to one tensor call and Pillow's
-  own transpose is a memcpy. Both bottom out in memory bandwidth.
+- **`invert` is close to Pillow** (~3.6×) because it collapses to `tensor * -1 + 255`, three
+  fused element-wise ops, and both libraries bottom out in memory bandwidth. That's the shape
+  of op imaging can be competitive on.
+- **The 1.16 tensor engine regressed on convolution paths** (Gaussian / box / find_edges got
+  ~2-4× slower than 1.12) — worth a profile pass if someone wants to optimise. Point ops (like
+  `invert`) moved the OTHER way and got faster.
 - **OpenCV is ~10× faster than Pillow again** on almost everything because it's SIMD-vectorised
   through libjpeg-turbo, IPP, and (where available) OpenCL. Nothing pure-Python can match it.
 - **The imaging → Pillow gap widens on rank filters (median, min, max).** Our impl stacks the
