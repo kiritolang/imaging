@@ -111,8 +111,10 @@ s.eq("MedianFilter drops single-pixel spike",
 
 # ----------------------------------------------------------------- built-in kernel constants
 # Every constant is a Kernel with the documented size. Just verify their shapes / attributes.
+# (Use isinstance rather than `type(k) == "Kernel"` -- ki 1.17 qualifies cross-module class
+# names as `img/filter:Kernel`, so a bare string compare breaks the moment the test moves.)
 var checkKernel = Function(name, k, want_size):
-    s.eq("kernel " + name + " is Kernel", type(k), "Kernel")
+    s.truthy("kernel " + name + " is Kernel", isinstance(k, ImageFilter.Kernel))
     s.eq("kernel " + name + " size",       k.size,  want_size)
     s.eq("kernel " + name + " length",     len(k.kernel), want_size * want_size)
 checkKernel("BLUR",              ImageFilter.BLUR,              5)

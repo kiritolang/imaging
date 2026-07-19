@@ -27,25 +27,25 @@ their tab-separated output into a Markdown table.
 
 ## Sample results
 
-`ki 1.16.1` vs Pillow 12.3.0 vs OpenCV 5.0.0, 128×128 RGB, best of 5. Times in ms:
+`ki 1.17.0` vs Pillow 12.3.0 vs OpenCV 5.0.0, 128×128 RGB, best of 5. Times in ms:
 
 | operation         |    imaging |     pillow |     opencv |   vs pil |    vs cv |
 |-------------------|------------|------------|------------|----------|----------|
-| flip_horizontal   |       3.61 |       0.01 |       0.01 |   249.5x |   598.6x |
-| flip_vertical     |       3.71 |       0.01 |       0.00 |   674.2x |  1071.2x |
-| rotate_90         |      10.56 |       0.01 |       0.01 |   708.4x |  1011.5x |
-| rotate_180        |      14.80 |       0.01 |       0.01 |  1141.1x |  2497.8x |
-| translate_paste   |      42.50 |       0.08 |       0.07 |   516.7x |   618.5x |
-| gaussian_blur_r2  |     486.58 |       0.54 |       0.02 |   903.9x | 20341.1x |
-| box_blur_r2       |     460.58 |       0.21 |       0.02 |  2153.0x | 21793.3x |
-| median_3x3        |     242.23 |       1.41 |       0.03 |   171.3x |  7424.7x |
-| find_edges        |     202.09 |       0.38 |       0.06 |   526.6x |  3408.3x |
-| convert_rgb_to_l  |      20.47 |       0.02 |       0.01 |   957.7x |  1811.9x |
-| resize_half_bilin |      21.61 |       0.12 |       0.01 |   179.7x |  2176.1x |
-| resize_2x_bilin   |      44.05 |       0.63 |       0.10 |    69.5x |   431.3x |
-| invert            |       0.31 |       0.09 |       0.00 |     3.6x |   123.1x |
-| autocontrast      |      83.47 |       0.24 |       0.00 |   354.4x | 28585.1x |
-| equalize          |     143.51 |       0.20 |       0.06 |   705.5x |  2229.2x |
+| flip_horizontal   |       3.61 |       0.01 |       0.01 |   247.5x |   605.3x |
+| flip_vertical     |       3.62 |       0.00 |       0.00 |   794.1x |  1260.9x |
+| rotate_90         |       5.00 |       0.01 |       0.01 |   337.8x |   497.2x |
+| rotate_180        |       7.10 |       0.01 |       0.01 |   546.9x |  1206.3x |
+| translate_paste   |      43.66 |       0.08 |       0.04 |   542.4x |  1013.6x |
+| gaussian_blur_r2  |     289.40 |       0.54 |       0.02 |   540.6x | 14976.9x |
+| box_blur_r2       |     403.04 |       0.19 |       0.02 |  2098.3x | 18290.0x |
+| median_3x3        |     220.71 |       1.36 |       0.03 |   162.2x |  6755.1x |
+| find_edges        |     200.40 |       0.37 |       0.09 |   539.5x |  2356.0x |
+| convert_rgb_to_l  |      20.70 |       0.02 |       0.01 |   992.8x |  1420.3x |
+| resize_half_bilin |      20.14 |       0.12 |       0.01 |   167.9x |  1448.5x |
+| resize_2x_bilin   |      45.11 |       0.61 |       0.16 |    74.2x |   288.4x |
+| invert            |       0.32 |       0.08 |       0.00 |     3.8x |    82.0x |
+| autocontrast      |      94.76 |       0.22 |       0.00 |   435.4x | 23288.9x |
+| equalize          |     150.66 |       0.20 |       0.08 |   744.7x |  1859.8x |
 
 `vs pil` / `vs cv` show how many times **slower** imaging is; `1.0x` would be a tie.
 

@@ -261,17 +261,17 @@ lists its full method surface — the same guarantees every Kirito value carries
 
 `benchmarks/run.sh` times a common set of operations (flips, rotate, translate, Gaussian/box/median
 filters, resize, convert, autocontrast, equalize, invert) against Pillow and OpenCV on the same PNG
-fixture. Sample numbers on 128×128 RGB with `ki 1.16.1` — see `benchmarks/README.md` for the full
+fixture. Sample numbers on 128×128 RGB with `ki 1.17.0` — see `benchmarks/README.md` for the full
 table and methodology:
 
 | operation         | imaging (ms) | Pillow (ms) | OpenCV (ms) | vs Pillow | vs OpenCV |
 |-------------------|-------------:|------------:|------------:|----------:|----------:|
-| flip_horizontal   |         3.61 |        0.01 |        0.01 |     249x |     599x  |
-| rotate_180        |        14.80 |        0.01 |        0.01 |    1141x |    2498x  |
-| gaussian_blur_r2  |       486.58 |        0.54 |        0.02 |     904x |   20341x  |
-| median_3x3        |       242.23 |        1.41 |        0.03 |     171x |    7425x  |
-| resize_2x_bilin   |        44.05 |        0.63 |        0.10 |      70x |     431x  |
-| invert            |         0.31 |        0.09 |        0.00 |     3.6x |     123x  |
+| flip_horizontal   |         3.61 |        0.01 |        0.01 |     247x |     605x  |
+| rotate_180        |         7.10 |        0.01 |        0.01 |     547x |    1206x  |
+| gaussian_blur_r2  |       289.40 |        0.54 |        0.02 |     540x |   14977x  |
+| median_3x3        |       220.71 |        1.36 |        0.03 |     162x |    6755x  |
+| resize_2x_bilin   |        45.11 |        0.61 |        0.16 |      74x |     288x  |
+| invert            |         0.32 |        0.08 |        0.00 |     3.8x |      82x  |
 
 Reads: absolute times are still small at 128 px per side, but the gap widens linearly with pixel
 count and quickly with kernel size. Kirito interprets the top of every tensor op while Pillow and
